@@ -437,6 +437,14 @@ void H4AsyncClient::TX(const uint8_t* data,size_t len,bool copy){
                 H4AT_PRINT2("Cannot write: available=%d QL=%d\n",available,tcp_sndqueuelen(pcb));
                 _HAL_feedWatchdog();
                 yield();
+                if (millis() - _lastSeen > H4AS_SCAVENGE_FREQ)   // To not stuck here. Could inform at someway...
+                {
+                    // Observed when I block the target software (mosquitto) at windows firewall then allow it.
+                    _shutdown();
+                    openConnections.erase(this);
+                    delete this;
+                    return;
+                }
             }
         }
     } else H4AT_PRINT1("%p _TX called during close!\n",this);
