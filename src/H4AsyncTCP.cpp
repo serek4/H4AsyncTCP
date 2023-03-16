@@ -43,6 +43,7 @@ extern "C"{
 #endif
 
 std::unordered_set<H4AsyncClient*> H4AsyncClient::openConnections;
+std::unordered_set<H4AsyncClient*> H4AsyncClient::unconnectedClients;
 
 H4_INT_MAP H4AsyncClient::_errorNames={
 #if H4AT_DEBUG
@@ -163,7 +164,7 @@ err_t _raw_recv(void *arg, struct tcp_pcb *tpcb, struct pbuf *p, err_t err){
     else {
         auto cpydata=static_cast<uint8_t*>(malloc(p->tot_len));
         if(cpydata){
-            memcpy(cpydata,p->payload,p->tot_len);
+            memcpy(cpydata,p->payload,p->tot_len);  // Might debug cpydata ..? p->len instead of p->tot_len?
             auto cpyflags=p->flags;
             auto cpylen=p->tot_len;
             tcp_recved(tpcb, p->tot_len);
@@ -198,6 +199,7 @@ err_t _tcp_connected(void* arg, void* tpcb, err_t err){
         H4AT_PRINT1("C=%p _tcp_connected p=%p e=%d IP=%s:%d\n",rq,tpcb,err,ip.toString().c_str(),p->remote_port);
     #endif
         H4AsyncClient::openConnections.insert(rq);
+        H4AsyncClient::unconnectedClients.erase(rq);
         if(rq->_cbConnect) rq->_cbConnect();
         tcp_recv(p, &_raw_recv);
         // ***************************************************
@@ -250,6 +252,8 @@ H4AsyncClient::H4AsyncClient(struct tcp_pcb *newpcb): pcb(newpcb){
         tcp_recv(pcb, &_raw_recv);
         tcp_err(pcb, &_raw_error);
     }
+    unconnectedClients.insert(this);
+    _creatTime = millis();
 }
 
 void H4AsyncClient::_clearDanglingInput() {
@@ -337,16 +341,25 @@ void H4AsyncClient::_scavenge(){
     h4.every(
         H4AS_SCAVENGE_FREQ,
         []{
-            H4AT_PRINT1("SCAVENGE CONNECTIONS!\n");
+            H4AT_PRINT1("SCAVENGE CONNECTIONS! oc=%u uc=%u\n", openConnections.size(), unconnectedClients.size());
             std::vector<H4AsyncClient*> tbd;
             for(auto &oc:openConnections){
                 H4AT_PRINT1("T=%u OC %p ls=%u age(s)=%u SCAV=%u\n",millis(),oc,oc->_lastSeen,(millis() - oc->_lastSeen) / 1000,H4AS_SCAVENGE_FREQ);
                 if((millis() - oc->_lastSeen) > H4AS_SCAVENGE_FREQ) tbd.push_back(oc);
             }
+            for(auto &uc:unconnectedClients){
+                H4AT_PRINT1("T=%u UC %p ct=%u age(s)=%u SCAV=%u\n",millis(),uc,uc->_creatTime,(millis() - uc->_creatTime) / 1000,H4AS_SCAVENGE_FREQ);
+                if((millis() - uc->_creatTime) > H4AS_SCAVENGE_FREQ) tbd.push_back(uc);
+            }
             for(auto &rq:tbd) {
                 H4AT_PRINT1("Scavenging %p\n",rq); 
-                rq->_shutdown();
-                openConnections.erase(rq);
+                if (openConnections.count(rq))
+                {
+                    rq->_shutdown();
+                    openConnections.erase(rq);
+                }
+                else
+                    unconnectedClients.erase(rq);
                 delete rq;
             }
         },
@@ -437,12 +450,10 @@ void H4AsyncClient::TX(const uint8_t* data,size_t len,bool copy){
                 H4AT_PRINT2("Cannot write: available=%d QL=%d\n",available,tcp_sndqueuelen(pcb));
                 _HAL_feedWatchdog();
                 yield();
-                if (millis() - _lastSeen > H4AS_SCAVENGE_FREQ)   // To not stuck here. Could inform at someway...
+                if (millis() - _lastSeen > H4AS_WRITE_TIMEOUT/* Lower to 5000U? */)   // To not stuck here. Could inform at someway...
                 {
                     // Observed when I block the target software (mosquitto) at windows firewall then allow it.
                     _shutdown();
-                    openConnections.erase(this);
-                    delete this;
                     return;
                 }
             }
