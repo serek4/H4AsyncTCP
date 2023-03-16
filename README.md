@@ -4,6 +4,13 @@
 
 ## ArduinoIDE library: Asynchronous TCP Rx/Tx Client and abstract Asynchronous server
 
+## Version 0.0.4
+
+* BUGFIX: memory leak of unconnected clients instances.
+## Version 0.0.3
+
+* BUGFIX: Infinite loop at TX, rare bug.
+
 ## Version 0.0.2 (19/10/2021) - Should be considered "ALPHA"
 
 * BUGFIX: memory leak when receiving small msgs

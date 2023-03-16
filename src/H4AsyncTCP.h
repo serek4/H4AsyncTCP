@@ -111,7 +111,7 @@ class H4AsyncClient {
                 H4AT_FN_RXDATA      _rxfn=[](const uint8_t* data,size_t len){ Serial.printf("RXFN SAFETY\n"); dumphex(data,len); };
     public:
         static  std::unordered_set<H4AsyncClient*> openConnections;
-        static  std::unordered_set<H4AsyncClient*> unconnectedInstances;
+        static  std::unordered_set<H4AsyncClient*> unconnectedClients;
                 struct  URL {
                     std::string     scheme;
                     std::string     host;
