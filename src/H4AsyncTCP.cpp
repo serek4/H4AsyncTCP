@@ -158,7 +158,7 @@ void _raw_error(void *arg, err_t err){
 }
 
 err_t _raw_recv(void *arg, struct tcp_pcb *tpcb, struct pbuf *p, err_t err){
-    H4AT_PRINT2("_raw_recv %p p=%p data=%p l=%d\n",arg,p,p ? p->payload:0,p ? p->tot_len:0);
+    H4AT_PRINT2("_raw_recv %p tpcb=%p p=%p data=%p l=%d\n",arg,tpcb,p,p ? p->payload:0,p ? p->tot_len:0);
     auto rq=reinterpret_cast<H4AsyncClient*>(arg);
     if (p == NULL || rq->_closing) rq->_notify(ERR_CLSD,err); // * warn ...hanging data when closing?
     else {
@@ -247,13 +247,16 @@ H4AsyncClient::H4AsyncClient(struct tcp_pcb *newpcb): pcb(newpcb){
 //    _heapLO=(_HAL_freeHeap() * H4T_HEAP_CUTOUT_PC) / 100;
 //    _heapHI=(_HAL_freeHeap() * H4T_HEAP_CUTIN_PC) / 100;
     H4AT_PRINT1("H4AC CTOR %p PCB=%p\n",this,pcb);
-    if(pcb){
+    if(pcb){ // H4AsyncServer receives the pcb, already connected.
         tcp_arg(pcb, this);
         tcp_recv(pcb, &_raw_recv);
         tcp_err(pcb, &_raw_error);
     }
-    unconnectedClients.insert(this);
-    _creatTime = millis();
+    else
+    {
+        unconnectedClients.insert(this);
+        _creatTime = millis();
+    }
 }
 
 void H4AsyncClient::_clearDanglingInput() {

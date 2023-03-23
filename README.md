@@ -4,6 +4,9 @@
 
 ## ArduinoIDE library: Asynchronous TCP Rx/Tx Client and abstract Asynchronous server
 
+## Version 0.0.5
+
+* BUGFIX: Multiple scavenging of accepted TCP PCBs (as a server).
 ## Version 0.0.4
 
 * BUGFIX: memory leak of unconnected clients instances.
