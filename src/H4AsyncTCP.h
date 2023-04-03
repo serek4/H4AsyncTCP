@@ -126,6 +126,7 @@ class H4AsyncClient {
                 uint8_t*            _bpp=nullptr;
                 H4_FN_VOID          _cbConnect;
                 H4_FN_VOID          _cbDisconnect;
+                H4_FN_VOID          _cbConnectFail;
                 H4AT_FN_ERROR       _cbError=[](int e,int i){ return true; }; // return false to avoid auto-shutdown
                 bool                _closing=false;
         static  H4_INT_MAP          _errorNames;
@@ -157,6 +158,7 @@ class H4AsyncClient {
                 void                nagle(bool b=true);
                 void                onConnect(H4_FN_VOID cb){ _cbConnect=cb; }
                 void                onDisconnect(H4_FN_VOID cb){ _cbDisconnect=cb; }
+                void                onConnectFail(H4_FN_VOID cb){ _cbConnectFail=cb; }
                 void                onError(H4AT_FN_ERROR cb){ _cbError=cb; }
                 void                onRX(H4AT_FN_RXDATA f){ _rxfn=f; }
                 uint32_t            remoteAddress();

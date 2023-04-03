@@ -137,12 +137,20 @@ void H4AsyncClient::_shutdown(){
         tcp_err(pcb, NULL);
         err_t err;
         H4AT_PRINT1("*********** pre closing state=%d\n",pcb->state);
-        if(pcb->state){
-            err=tcp_close(pcb);
-            if(_cbDisconnect) _cbDisconnect();
-            else H4AT_PRINT1("NO DISCONNECT HANDLER\n");
+        if (pcb->state) err=tcp_close(pcb);
+            else H4AT_PRINT1("*********** already closed?\n");
+            
+        if (openConnections.count(this)) { // There's an open connection
+            if (_cbDisconnect) _cbDisconnect();
+            else
+                H4AT_PRINT1("NO DISCONNECT HANDLER\n");
         }
-        else H4AT_PRINT1("*********** already closed?\n");
+        else { // The connection was never established
+            if (_cbConnectFail) _cbConnectFail();
+            else
+                H4AT_PRINT1("NO CONNECT FAIL HANDLER\n");
+        }
+
         H4AT_PRINT1("*********** NULL IT\n");
         pcb=NULL; // == eff = reset;
     } else H4AT_PRINT1("ALREADY SHUTDOWN %p pcb=0!\n",this);
@@ -152,7 +160,7 @@ void _raw_error(void *arg, err_t err){
     h4.queueFunction([arg,err]{
         H4AT_PRINT1("CONNECTION %p *ERROR* err=%d\n",arg,err);
         auto c=reinterpret_cast<H4AsyncClient*>(arg);
-        c->pcb=NULL;
+        // if (!err) c->pcb=NULL;  // _shutdown() will be called by _notify() if there's an err and pcb will be set to NULL
         c->_notify(err);
     });
 }
@@ -183,12 +191,14 @@ err_t _raw_recv(void *arg, struct tcp_pcb *tpcb, struct pbuf *p, err_t err){
     }
     return err;
 }
-/*
+
 err_t _raw_sent(void* arg,struct tcp_pcb *tpcb, u16_t len){
     Serial.printf("_raw_sent %p pcb=%p len=%d\n",arg,tpcb,len);
+    auto rq=reinterpret_cast<H4AsyncClient*>(arg);
+    rq->_lastSeen=millis();
     return ERR_OK;
 }
-*/
+
 err_t _tcp_connected(void* arg, void* tpcb, err_t err){
     h4.queueFunction([arg,tpcb,err]{
         H4AT_PRINT1("_tcp_connected %p %p e=%d\n",arg,tpcb,err);
@@ -203,7 +213,7 @@ err_t _tcp_connected(void* arg, void* tpcb, err_t err){
         if(rq->_cbConnect) rq->_cbConnect();
         tcp_recv(p, &_raw_recv);
         // ***************************************************
-        //tcp_sent(p, &_raw_sent);
+        tcp_sent(p, &_raw_sent);
     });
     return ERR_OK;
 }
@@ -432,9 +442,12 @@ void H4AsyncClient::TX(const uint8_t* data,size_t len,bool copy){
         uint8_t flags;
         size_t  sent=0;
         size_t  left=len;
-        _lastSeen=millis();
 
         while(left){
+            if (!pcb) { // ESP32 switch context, we might being in this loop --> switch context --> TCP disconnection --> NULLs the PCB --> return to this context --> crash
+                H4AT_PRINT1("PCB IS NULL!\n");
+                break;
+            }
             size_t available=tcp_sndbuf(pcb);
             if(available && (tcp_sndqueuelen(pcb) < TCP_SND_QUEUELEN )){
                 auto chunk=std::min(left,available);
@@ -452,7 +465,7 @@ void H4AsyncClient::TX(const uint8_t* data,size_t len,bool copy){
             else {
                 H4AT_PRINT2("Cannot write: available=%d QL=%d\n",available,tcp_sndqueuelen(pcb));
                 _HAL_feedWatchdog();
-                yield();
+                yield();    // could switch context for ESP32?
                 if (millis() - _lastSeen > H4AS_WRITE_TIMEOUT/* Lower to 5000U? */)   // To not stuck here. Could inform at someway...
                 {
                     // Observed when I block the target software (mosquitto) at windows firewall then allow it.

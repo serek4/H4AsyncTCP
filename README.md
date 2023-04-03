@@ -3,7 +3,12 @@
 # H4AsyncTCP
 
 ## ArduinoIDE library: Asynchronous TCP Rx/Tx Client and abstract Asynchronous server
-
+## Version 0.0.6
+* BUGFIX: Nullifying a pcb in _raw_error, which causes _shutDown to not work as expected.
+* ADD: onConnectFail callback to handle a connection failure in the first place.
+* BUGFIX: Using nullified `pcb` in `TX()` by another thread in ESP32 caused by a context switch. 
+* BUGFIX: onDisconnect/onConnectionFail would be called despite the `pcb->state`.
+* BUGFIX: _lastSeen time update on TX, not actual `_raw_sent()` callback.
 ## Version 0.0.5
 
 * BUGFIX: Multiple scavenging of accepted TCP PCBs (as a server).
