@@ -65,14 +65,15 @@ enum {
     H4AT_CLOSING,
     H4AT_OUTPUT_TOO_BIG
 };
-
+constexpr err_enum_t pcb_deleted = (err_enum_t)-20;
 #if H4AT_DEBUG
+    #define H4AT_PRINTF(...) Serial.printf(__VA_ARGS__)
     template<int I, typename... Args>
     void H4AT_PRINT(const char* fmt, Args... args) {
         #ifdef ARDUINO_ARCH_ESP32
-        if (H4AT_DEBUG >= I) Serial.printf(std::string(std::string("H4AT:%d: H=%u M=%u S=%u ")+fmt).c_str(),I,_HAL_freeHeap(),_HAL_maxHeapBlock(),uxTaskGetStackHighWaterMark(NULL),args...);
+        if (H4AT_DEBUG >= I) H4AT_PRINTF(std::string(std::string("H4AT:%d: H=%u M=%u S=%u ")+fmt).c_str(),I,_HAL_freeHeap(),_HAL_maxHeapBlock(),uxTaskGetStackHighWaterMark(NULL),args...);
         #else
-        if (H4AT_DEBUG >= I) Serial.printf(std::string(std::string("H4AT:%d: H=%u M=%u ")+fmt).c_str(),I,_HAL_freeHeap(),_HAL_maxHeapBlock(),args...);
+        if (H4AT_DEBUG >= I) H4AT_PRINTF(std::string(std::string("H4AT:%d: H=%u M=%u ")+fmt).c_str(),I,_HAL_freeHeap(),_HAL_maxHeapBlock(),args...);
         #endif
     }
     #define H4AT_PRINT1(...) H4AT_PRINT<1>(__VA_ARGS__)
@@ -87,6 +88,7 @@ enum {
     #define H4AT_DUMP3(p,l) H4AT_dump<3>((p),l)
     #define H4AT_DUMP4(p,l) H4AT_dump<4>((p),l)
 #else
+    #define H4AT_PRINTF(...)
     #define H4AT_PRINT1(...)
     #define H4AT_PRINT2(...)
     #define H4AT_PRINT3(...)
@@ -112,6 +114,32 @@ class H4AsyncClient {
     public:
         static  std::unordered_set<H4AsyncClient*> openConnections;
         static  std::unordered_set<H4AsyncClient*> unconnectedClients;
+
+        void printState(std::string context);
+        static void retryClose(H4AsyncClient* c,tcp_pcb* pcb);
+        static void checkPCBs(std::string context, int cxt = 0, bool forceprint=false){
+            static int count = 0;
+            static int active = 0;
+            if (cxt > 0) active++;
+            else if (cxt < 0) active--;
+
+            if (!forceprint && count++ % 20) return;
+            int total_active = 0;
+            for(auto& c:openConnections) total_active += c->pcb != nullptr;
+            for(auto& c:unconnectedClients) total_active += c->pcb != nullptr;
+            if (active != total_active) {
+                H4AT_PRINT2("ERROR: active=%d total_active=%d\n", active, total_active);
+            }
+#if H4AT_DEBUG > 1
+            H4AT_PRINTF("%s PCBs:\t",context.c_str());
+            // H4AT_PRINTF("openConnections: %d\ttotal_active: %d\n",openConnections.size(), total_active);
+            for (auto &c : openConnections)
+                if (c->pcb) {
+                    H4AT_PRINTF("%p\t", c->pcb);
+                }
+            H4AT_PRINTF("\n");
+#endif
+        }
                 struct  URL {
                     std::string     scheme;
                     std::string     host;
@@ -174,7 +202,7 @@ class H4AsyncClient {
                 void                _handleFragment(const uint8_t* data,u16_t len,u8_t flags);
                 void                _notify(int e,int i=0);
         static  void                _scavenge();
-                void                _shutdown();
+                void                _shutdown(bool aborted = false);
 };
 
 class H4AsyncServer {

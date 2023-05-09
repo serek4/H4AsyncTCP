@@ -27,31 +27,59 @@ SOFTWARE.
 extern "C"{
   #include "lwip/tcp.h"
 }
+// https://lists.nongnu.org/archive/html/lwip-users/2010-03/msg00142.html "Listening connection issue"
 
 static err_t _raw_accept(void *arg, struct tcp_pcb *p, err_t err){
+#if ARDUINO_ARCH_ESP32
+    static auto is_sane_server = [](uint32_t c) -> bool { return c >= SOC_DRAM_LOW && c <= SOC_DRAM_HIGH;};
+#endif
+    static auto is_sane_state = [](tcp_state state) -> bool {return state >= CLOSED && state <= TIME_WAIT;};
     h4.queueFunction([arg,p,err]{
-//        H4AT_PRINT1("RAW _raw_accept <-- arg=%p p=%p e=%d\n",arg,p,err);
+        H4AT_PRINT1("RAW _raw_accept <-- arg=%p p=%p e=%d state=%d\n",arg,p,err,p->state);
         if(!err){
+            // Serial.printf("ACCEPT %p\n",p);
+            if (!is_sane_state(p->state)){
+                Serial.printf("Wrong state %d! Discarding PCB\n", p->state);// This might be due to multi-threading on ESP32
+                return;
+            }
             tcp_setprio(p, TCP_PRIO_MIN);
-            H4AT_PRINT1("RAW _raw_accept <-- arg=%p p=%p e=%d\n",arg,p,err);
+            H4AT_PRINT2("Remote IP %s\n", ipaddr_ntoa(&p->remote_ip)); // Could check the the validity of the IP address
             auto srv=reinterpret_cast<H4AsyncServer*>(arg);
             auto c=srv->_instantiateRequest(p);
-            H4AT_PRINT1("NEW CONNECTION %p --> pcb=%p\n",c,p);
+            H4AT_PRINT1("NEW CONNECTION %p --> pcb=%p state=%d\n",c,p,p->state);
+#if ARDUINO_ARCH_ESP32
+            if (!is_sane_server((uint32_t)c)) {
+                Serial.printf("INSANE SERVER %p\n", c);
+                return;
+            }
+            H4AT_PRINT1("sane c=%d\n",is_sane_server((uint32_t)c));
+            if(c && is_sane_server((uint32_t)c)){
+#else
             if(c){
+#endif
                 c->_lastSeen=millis();
                 c->onError([=](int e,int i){
                     if(e==ERR_MEM){
                         H4AT_PRINT1("OOM ERROR %d\n",i); // Retry-After: 120
                         return false;
-                    } if(srv->_srvError) srv->_srvError(e,i);
+                    } 
+                    if(srv->_srvError) 
+                        return srv->_srvError(e,i);
                     return true;
                 });
-//                H4AT_PRINT1("QF 1 %p\n",c);
+//                H4AT_PRINT3("QF 1 %p\n",c);
                 c->onRX([=](const uint8_t* data,size_t len){ srv->route(c,data,len); });
-//                H4AT_PRINT1("QF insert c --> in %p\n",c);
+//                H4AT_PRINT3("QF insert c --> in %p\n",c);
+                auto it = std::find_if(H4AsyncClient::openConnections.begin(), H4AsyncClient::openConnections.end(), [=](H4AsyncClient* _c){ return _c->pcb==p; });
+                bool found = it != H4AsyncClient::openConnections.end();
+                if (found) { // A Log shows no triggering of this block.
+                    Serial.printf("PCB IS ALREADY IN THE LIST !!!!!\n");
+                    (*it)->_shutdown(true);
+                }
                 H4AsyncClient::openConnections.insert(c);
-//                H4AT_PRINT1("QF insert c --> out %p\n",c);
-            } // else Serial.printf("_instantiateRequest returns 0 !!!!!  %p\n",p);
+                H4AsyncClient::checkPCBs("ACCEPT", 1);
+//                H4AT_PRINT3("QF insert c --> out %p\n",c);
+            } else H4AT_PRINT1("_instantiateRequest returns WRONG VALUE !!!!! p=%p c=%p\n",p,c); // Might abort/close the connection
         } // else Serial.printf("RAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAW %d\n",err);
     });
     return ERR_OK;
