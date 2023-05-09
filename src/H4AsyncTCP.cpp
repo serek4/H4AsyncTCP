@@ -340,9 +340,9 @@ static err_t _tcp_write_api(void *api_call_params){
 #endif
     tcp_api_call_t * params = (tcp_api_call_t *)api_call_params;
     auto c=reinterpret_cast<H4AsyncClient*>(params->c);
-    if (!c->pcb || c->pcb != params->pcb) // [ ] Delete this block?
+    if (!c->pcb || c->pcb != params->pcb)
     {
-        H4AT_PRINT1("BAD PCB %p %p\n",c->pcb,params->pcb);// [ ] Double check this 
+        H4AT_PRINT2("BAD PCB %p %p\n",c->pcb,params->pcb);// [x] Double check this (Sample output: "BAD PCB 0x0 0x3ffe4834")
         return pcb_deleted;
     }
     auto err = tcp_write(params->pcb, params->data, params->size, params->apiflags);
