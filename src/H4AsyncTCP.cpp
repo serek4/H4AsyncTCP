@@ -44,6 +44,8 @@ extern "C"{
 
 std::unordered_set<H4AsyncClient*> H4AsyncClient::openConnections;
 std::unordered_set<H4AsyncClient*> H4AsyncClient::unconnectedClients;
+size_t H4AsyncClient::_heapHI=(_HAL_freeHeap() * H4T_HEAP_CUTOUT_PC) / 100;
+size_t H4AsyncClient::_heapLO=(_HAL_freeHeap() * H4T_HEAP_CUTIN_PC) / 100;
 
 H4_INT_MAP H4AsyncClient::_errorNames={
 #if H4AT_DEBUG

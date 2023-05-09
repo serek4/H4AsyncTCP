@@ -158,8 +158,8 @@ class H4AsyncClient {
                 H4AT_FN_ERROR       _cbError=[](int e,int i){ return true; }; // return false to avoid auto-shutdown
                 bool                _closing=false;
         static  H4_INT_MAP          _errorNames;
-//                size_t              _heapLO;
-//                size_t              _heapHI;
+        static  size_t              _heapLO;
+        static  size_t              _heapHI;
                 uint32_t            _lastSeen=0;
                 uint32_t            _creatTime=0;
                 bool                _nagle=false;
