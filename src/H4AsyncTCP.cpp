@@ -97,7 +97,9 @@ enum tcp_state {
   LAST_ACK    = 9,
   TIME_WAIT   = 10
 };
+*/
 
+#if H4AT_DEBUG
 static const char * const tcp_state_str[] = {
   "CLOSED",
   "LISTEN",
@@ -111,7 +113,7 @@ static const char * const tcp_state_str[] = {
   "LAST_ACK",
   "TIME_WAIT"
 };
-*/
+#endif
 typedef struct {
     H4AsyncClient* c;
     struct tcp_pcb* pcb;
@@ -120,32 +122,122 @@ typedef struct {
     uint8_t apiflags;
 } tcp_api_call_t;
 
-void H4AsyncClient::_notify(int e,int i){ if(e) if(_cbError(e,i)) _shutdown(); }
+void H4AsyncClient::printState(std::string context){
+    H4AT_PRINT2("%s\tpcb=%p s=%d \"%s\"\n", context.c_str(), pcb, pcb->state, (pcb->state >= CLOSED && pcb->state <=TIME_WAIT)? tcp_state_str[pcb->state]:"???");
+}
 
-void H4AsyncClient::_shutdown(){
+void H4AsyncClient::retryClose(H4AsyncClient* c,tcp_pcb *pcb)
+{
+    // Check the state of the connection
+    Serial.printf("retryClose %p state=%d\n", pcb, pcb->state);
+    // Check the presence of the PCB with other Clients ??
+    auto checkOtherOwners = [c,pcb] (std::unordered_set<H4AsyncClient*>& set){
+        for (auto& _c : set){
+            if (_c->pcb == pcb && _c!=c){
+                Serial.printf("%p found in other client %p\n", pcb, _c);
+                return true;
+            }
+        }
+        return false;
+    };
+
+    // If there's another client with this pcb, don't close it, and NULLify the PCB for not closing it again at SCAVENGE
+    if (checkOtherOwners(openConnections)){
+        if (std::find(openConnections.begin(), openConnections.end(), c) != openConnections.end())
+            c->pcb=NULL;
+        return;
+    }
+    else if (checkOtherOwners(unconnectedClients)){ 
+        if (std::find(unconnectedClients.begin(), unconnectedClients.end(), c) != unconnectedClients.end())
+            c->pcb=NULL;
+        return;
+    }
+    
+    if (pcb->state <= CLOSED || pcb->state > TIME_WAIT){
+        Serial.printf("Already freed/closed\n", pcb);
+        return;
+    }
+    err_t err = tcp_close(pcb);
+    if (err != ERR_OK){
+        Serial.printf("failed with %d\n", pcb, err);
+    }
+    if (err == ERR_MEM){
+        h4.queueFunction([c, pcb](){ retryClose(c,pcb); }); // h4.once(1000, [pcb](){retruClose(pcb);}); ???
+    }
+    if (err == ERR_OK){
+        Serial.printf("freed %p\n", pcb);
+    }
+    
+}
+
+void H4AsyncClient::_notify(int e,int i) { 
+    if(e) if (_cbError(e,i)) _shutdown(e==ERR_ABRT || e==ERR_CONN); // ERR_CONN due to ESP32 multithreading calls
+    /* "The "myclose()" function is not a simple call to tcp_close(pcb) because
+    it may fail and you need to retry later by means of the poll callback or
+    your own method."
+    https://lists.nongnu.org/archive/html/lwip-users/2016-01/msg00020.html
+    */
+}
+void H4AsyncClient::_shutdown(bool aborted){
     H4AT_PRINT1("_shutdown %p\n",this);
+    if (_closing)
+        assert(pcb==NULL);
+
     _closing=true;
     _lastSeen=0;
     if(pcb){
-        H4AT_PRINT1("RAW 1 PCB=%p STATE=%d\n",pcb,pcb->state);
+        // HAL_disableInterrupts();
+#if 0
+        std::string context = "SHUTDOWN";
+        context.push_back(' ');
+        if (aborted)
+            context += "(ABORTED)";
+        printState(context);
+#endif
+        H4AT_PRINT1("RAW 1 PCB=%p STATE=%d \"%s\"\n",pcb,pcb->state,(pcb->state >= CLOSED && pcb->state <=TIME_WAIT)? tcp_state_str[pcb->state]:"???");
         _clearDanglingInput();
-        H4AT_PRINT1("RAW 2 clean STATE=%d\n",pcb->state);
-        tcp_arg(pcb, NULL);
-        //***************************************************
-        tcp_sent(pcb, NULL);
-        tcp_recv(pcb, NULL);
-        tcp_err(pcb, NULL);
-        err_t err;
-        H4AT_PRINT1("*********** pre closing state=%d\n",pcb->state);
-        if (pcb->state) err=tcp_close(pcb);
-            else H4AT_PRINT1("*********** already closed?\n");
+        if (aborted || pcb->state > TIME_WAIT || pcb->state < CLOSED){
+            if (aborted)
+                H4AT_PRINT1("ABORTED CONNECTION\n");
+            else
+                H4AT_PRINT1("H4AT Wrong state on Shutdown!\n"); // There's an occurance of this source of error
+        }
+        else
+        {
+            H4AT_PRINT1("RAW 2 clean STATE=%d\n",pcb->state);
+            tcp_arg(pcb, NULL);
+            //***************************************************
+            tcp_sent(pcb, NULL);
+            tcp_recv(pcb, NULL);
+            tcp_err(pcb, NULL);
+            err_t err;
+            H4AT_PRINT1("*********** pre closing\n");
+
+            if (pcb->state) err=tcp_close(pcb);
+                else H4AT_PRINT1("*********** already closed?\n");
             
+            if (err)
+            {
+                H4AT_PRINT1("Error closing %d \"%s\"\n", err, _errorNames[err].c_str());
+                if (err==ERR_MEM)
+                {
+                    auto pcb_cpy = pcb;
+                    h4.queueFunction([this, pcb_cpy]
+                                     {
+                                         // Might try closing later ... ?
+                                         // What if we don't close it? Will it be closed by lwip automatically?
+                                         // What if lwip reused this pcb for another connection?
+                                         retryClose(this,pcb_cpy);
+                                     });
+                }
+            }
+        }
         if (openConnections.count(this)) { // There's an open connection
             if (_cbDisconnect) _cbDisconnect();
             else
                 H4AT_PRINT1("NO DISCONNECT HANDLER\n");
         }
-        else { // The connection was never established
+        else { // The connection (as a client) was never established
             if (_cbConnectFail) _cbConnectFail();
             else
                 H4AT_PRINT1("NO CONNECT FAIL HANDLER\n");
@@ -153,31 +245,37 @@ void H4AsyncClient::_shutdown(){
 
         H4AT_PRINT1("*********** NULL IT\n");
         pcb=NULL; // == eff = reset;
+        checkPCBs("SHUTDOWN", -1);
+        // HAL_enableInterrupts();
     } else H4AT_PRINT1("ALREADY SHUTDOWN %p pcb=0!\n",this);
 }
 
 void _raw_error(void *arg, err_t err){
     h4.queueFunction([arg,err]{
-        H4AT_PRINT1("CONNECTION %p *ERROR* err=%d\n",arg,err);
         auto c=reinterpret_cast<H4AsyncClient*>(arg);
+        H4AT_PRINT1("CONNECTION %p *ERROR* pcb=%p err=%d\n",arg,c->pcb, err);
         // if (!err) c->pcb=NULL;  // _shutdown() will be called by _notify() if there's an err and pcb will be set to NULL
         c->_notify(err);
     });
 }
 
 err_t _raw_recv(void *arg, struct tcp_pcb *tpcb, struct pbuf *p, err_t err){
-    H4AT_PRINT2("_raw_recv %p tpcb=%p p=%p data=%p l=%d\n",arg,tpcb,p,p ? p->payload:0,p ? p->tot_len:0);
+    H4AT_PRINT2("_raw_recv %p tpcb=%p p=%p err=%d data=%p tot_len=%d\n",arg,tpcb,p, err, p ? p->payload:0,p ? p->tot_len:0);
     auto rq=reinterpret_cast<H4AsyncClient*>(arg);
-    if (p == NULL || rq->_closing) rq->_notify(ERR_CLSD,err); // * warn ...hanging data when closing?
+    // Serial.printf("_raw_recv %p p=%p err=%d _closing=%d\n", tpcb, p, err, rq->_closing);
+    if (p == NULL || rq->_closing || err!=ERR_OK) rq->_notify(ERR_CLSD,err); // * warn ...hanging data when closing?
+    // https://lists.nongnu.org/archive/html/lwip-users/2016-01/msg00020.html
     else {
         auto cpydata=static_cast<uint8_t*>(malloc(p->tot_len));
         if(cpydata){
-            memcpy(cpydata,p->payload,p->tot_len);  // Might debug cpydata ..? p->len instead of p->tot_len?
+            // memcpy(cpydata,p->payload,p->tot_len);
+            pbuf_copy_partial(p,cpydata,p->tot_len,0); // instead of direct memcpy that only considers the first pbuf of the possible pbufs chain.
             auto cpyflags=p->flags;
             auto cpylen=p->tot_len;
+
+            // [ ] Might run at another context so tpcb might be invalid???
             tcp_recved(tpcb, p->tot_len);
             H4AT_PRINT2("* p=%p * FREE DATA %p %d 0x%02x bpp=%p\n",p,p->payload,p->tot_len,p->flags,rq->_bpp);
-            pbuf_free(p);
             err=ERR_OK;
             h4.queueFunction([rq,cpydata,cpylen,cpyflags]{
                 H4AT_PRINT2("_raw_recv %p data=%p L=%d f=0x%02x \n",rq,cpydata,cpylen,cpyflags);
@@ -187,13 +285,18 @@ err_t _raw_recv(void *arg, struct tcp_pcb *tpcb, struct pbuf *p, err_t err){
                 H4AT_PRINT2("FREEING NON REBUILT @ %p\n",cpydata);
                 free(cpydata);
             });
-        } else rq->_notify(ERR_MEM,_HAL_freeHeap());
+        } 
+        else
+        {
+            rq->_notify(ERR_MEM, _HAL_freeHeap());
+        }
+        pbuf_free(p); // [x] This line fixes a possible memory leak (we must pbuf_free(p) even if !cpydata).
     }
     return err;
 }
 
 err_t _raw_sent(void* arg,struct tcp_pcb *tpcb, u16_t len){
-    Serial.printf("_raw_sent %p pcb=%p len=%d\n",arg,tpcb,len);
+    H4AT_PRINT2("_raw_sent %p pcb=%p len=%d\n",arg,tpcb,len);
     auto rq=reinterpret_cast<H4AsyncClient*>(arg);
     rq->_lastSeen=millis();
     return ERR_OK;
@@ -202,6 +305,7 @@ err_t _raw_sent(void* arg,struct tcp_pcb *tpcb, u16_t len){
 err_t _tcp_connected(void* arg, void* tpcb, err_t err){
     h4.queueFunction([arg,tpcb,err]{
         H4AT_PRINT1("_tcp_connected %p %p e=%d\n",arg,tpcb,err);
+        H4AsyncClient::checkPCBs("CONNECTED", 1);
         auto rq=reinterpret_cast<H4AsyncClient*>(arg);
         auto p=reinterpret_cast<tcp_pcb*>(tpcb);
     #if H4AT_DEBUG
@@ -233,11 +337,18 @@ static err_t _tcp_write_api(struct tcpip_api_call_data *api_call_params){
 static err_t _tcp_write_api(void *api_call_params){
 #endif
     tcp_api_call_t * params = (tcp_api_call_t *)api_call_params;
+    auto c=reinterpret_cast<H4AsyncClient*>(params->c);
+    if (!c->pcb || c->pcb != params->pcb)
+    {
+        H4AT_PRINT2("BAD PCB %p %p\n",c->pcb,params->pcb);// [x] Double check this (Sample output: "BAD PCB 0x0 0x3ffe4834")
+        return pcb_deleted;
+    }
     auto err = tcp_write(params->pcb, params->data, params->size, params->apiflags);
-    if(err) Serial.printf("ERR %d after write H=%u sb=%d Q=%d\n",err,_HAL_freeHeap(),tcp_sndbuf(params->pcb),tcp_sndqueuelen(params->pcb));
+
+    if(err) H4AT_PRINT1("ERR %d after write H=%u sb=%d Q=%d\n",err,_HAL_freeHeap(),tcp_sndbuf(params->pcb),tcp_sndqueuelen(params->pcb));
     else {
         err=tcp_output(params->pcb);
-        if(err) Serial.printf("ERR %d after output H=%u sb=%d Q=%d\n",err,_HAL_freeHeap(),tcp_sndbuf(params->pcb),tcp_sndqueuelen(params->pcb));
+        if(err) H4AT_PRINT1("ERR %d after output H=%u sb=%d Q=%d\n",err,_HAL_freeHeap(),tcp_sndbuf(params->pcb),tcp_sndqueuelen(params->pcb));
     }
     return err;
 }
@@ -258,12 +369,15 @@ H4AsyncClient::H4AsyncClient(struct tcp_pcb *newpcb): pcb(newpcb){
 //    _heapHI=(_HAL_freeHeap() * H4T_HEAP_CUTIN_PC) / 100;
     H4AT_PRINT1("H4AC CTOR %p PCB=%p\n",this,pcb);
     if(pcb){ // H4AsyncServer receives the pcb, already connected.
+        // A server.
         tcp_arg(pcb, this);
         tcp_recv(pcb, &_raw_recv);
         tcp_err(pcb, &_raw_error);
+        tcp_sent(pcb, &_raw_sent); // to update _lastSeen
     }
     else
     {
+        // A client.
         unconnectedClients.insert(this);
         _creatTime = millis();
     }
@@ -328,7 +442,7 @@ uint8_t* H4AsyncClient::_addFragment(const uint8_t* data,u16_t len){
         }
         else {
         //  shouldn't ever happen!
-            Serial.printf("not enough realloc mem\n");
+            H4AT_PRINT1("not enough realloc mem\n");
             _clearDanglingInput();
         }
     }
@@ -437,25 +551,37 @@ std::string H4AsyncClient::remoteIPstring(){ return std::string(remoteIP().toStr
 uint16_t H4AsyncClient::remotePort(){ return pcb->remote_port;  }
 
 void H4AsyncClient::TX(const uint8_t* data,size_t len,bool copy){ 
-    H4AT_PRINT2("TX %p len=%d copy=%d max=%d\n",data,len,copy, maxPacket());
+    H4AT_PRINT2("TX pcb=%p data=%p len=%d copy=%d left=%d max=%d\n",pcb,data,len,copy, maxPacket());
     if(!_closing){
         uint8_t flags;
         size_t  sent=0;
         size_t  left=len;
 
         while(left){
-            if (!pcb) { // ESP32 switch context, we might being in this loop --> switch context --> TCP disconnection --> NULLs the PCB --> return to this context --> crash
-                H4AT_PRINT1("PCB IS NULL!\n");
+// Might short this block to an OS-based macro: 
+// #if NO_SYS == 0 
+            if (!pcb || (pcb->state != ESTABLISHED) &&
+                            (pcb->state != CLOSE_WAIT) &&
+                            (pcb->state != SYN_SENT) &&
+                            (pcb->state != SYN_RCVD))
+            { // ESP32 switch context, we might being in this loop --> switch context --> TCP disconnection --> NULLs the PCB --> return to this context --> crash
+                if (!pcb)
+                    H4AT_PRINT1("NULL PCB!\n");
+                else
+                    printState("TX WRONG STATE!\n"); // It has been freed previously by another thread.
                 break;
             }
+// #endif
             size_t available=tcp_sndbuf(pcb);
+            // Serial.printf("Av=%d QL=%d\n",available,tcp_sndqueuelen(pcb));
+            // printState("TX");
             if(available && (tcp_sndqueuelen(pcb) < TCP_SND_QUEUELEN )){
                 auto chunk=std::min(left,available);
                 flags=copy ? TCP_WRITE_FLAG_COPY:0;
                 if(left - chunk) flags |= TCP_WRITE_FLAG_MORE;
                 H4AT_PRINT2("WRITE %p L=%d F=0x%02x LEFT=%d Q=%d\n",data+sent,chunk,flags,left,tcp_sndqueuelen(pcb));
                 if(auto err=_tcp_write(this,pcb,data+sent,chunk,flags)){
-                    _notify(err,44);
+                    _notify(err,44); // [x] ((FIXED)) POTENTIAL ERROR SOURCE When err==-11 (ERR_CONN) --> it's because the PCB has been freed by another thread.
                     break;
                 } else {
                     sent+=chunk;
@@ -463,15 +589,18 @@ void H4AsyncClient::TX(const uint8_t* data,size_t len,bool copy){
                 }
             } 
             else {
+                /* [x] Solve an error where it's stuck here, because of unspecified error. */
                 H4AT_PRINT2("Cannot write: available=%d QL=%d\n",available,tcp_sndqueuelen(pcb));
                 _HAL_feedWatchdog();
                 yield();    // could switch context for ESP32?
-                if (millis() - _lastSeen > H4AS_WRITE_TIMEOUT/* Lower to 5000U? */)   // To not stuck here. Could inform at someway...
-                {
-                    // Observed when I block the target software (mosquitto) at windows firewall then allow it.
+
+                if (millis() - _lastSeen > H4AS_WRITE_TIMEOUT) {
                     _shutdown();
-                    return;
+                    H4AT_PRINT2("Write TIMEOUT: %d\n", millis() - _lastSeen);
+                    return; // Discard the rest of the data.
                 }
+                h4.queueFunction([this,data,len,copy,left,sent](){ TX(data+sent/*== data+len-left*/,left,copy);});
+                return;
             }
         }
     } else H4AT_PRINT1("%p _TX called during close!\n",this);
