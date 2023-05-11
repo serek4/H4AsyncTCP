@@ -63,7 +63,8 @@ enum {
     H4AT_HEAP_LIMITER_LOST,
     H4AT_INPUT_TOO_BIG,
     H4AT_CLOSING,
-    H4AT_OUTPUT_TOO_BIG
+    H4AT_OUTPUT_TOO_BIG,
+    H4AT_MAX_ERROR
 };
 constexpr err_enum_t pcb_deleted = (err_enum_t)-20;
 #if H4AT_DEBUG
@@ -156,10 +157,11 @@ class H4AsyncClient {
                 H4_FN_VOID          _cbDisconnect;
                 H4_FN_VOID          _cbConnectFail;
                 H4AT_FN_ERROR       _cbError=[](int e,int i){ return true; }; // return false to avoid auto-shutdown
+                H4_FN_VOID          _cbDelete;
                 bool                _closing=false;
         static  H4_INT_MAP          _errorNames;
-        static  size_t              _heapLO;
-        static  size_t              _heapHI;
+        //   size_t              _heapLO;
+        //   size_t              _heapHI;
                 uint32_t            _lastSeen=0;
                 uint32_t            _creatTime=0;
                 bool                _nagle=false;
@@ -167,7 +169,11 @@ class H4AsyncClient {
                 size_t              _stored=0;
 
         H4AsyncClient(tcp_pcb* p=0);
-        virtual ~H4AsyncClient(){ H4AT_PRINT2("H4AsyncClient DTOR %p pcb=%p _bpp=%p\n",this,pcb,_bpp); }
+        virtual ~H4AsyncClient(){
+                    H4AT_PRINT2("H4AsyncClient DTOR %p pcb=%p _bpp=%p\n", this, pcb, _bpp);
+                    if (_cbDelete)
+                _cbDelete();
+        }
                 void                close(){ _shutdown(); }
                 void                connect(const std::string& host,uint16_t port);
                 void                connect(IPAddress ip,uint16_t port);
@@ -189,6 +195,7 @@ class H4AsyncClient {
                 void                onConnectFail(H4_FN_VOID cb){ _cbConnectFail=cb; }
                 void                onError(H4AT_FN_ERROR cb){ _cbError=cb; }
                 void                onRX(H4AT_FN_RXDATA f){ _rxfn=f; }
+                void                onDelete(H4_FN_VOID cb){ _cbDelete=cb; }
                 uint32_t            remoteAddress();
                 IPAddress           remoteIP();
                 std::string         remoteIPstring();
@@ -203,6 +210,7 @@ class H4AsyncClient {
                 void                _notify(int e,int i=0);
         static  void                _scavenge();
                 void                _shutdown(bool aborted = false);
+
 };
 
 class H4AsyncServer {

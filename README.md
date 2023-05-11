@@ -3,6 +3,9 @@
 # H4AsyncTCP
 
 ## ArduinoIDE library: Asynchronous TCP Rx/Tx Client and abstract Asynchronous server
+## Version 0.0.8
+* Fixes Out of memory handling mechanism.
+* Prepares for ArmadilloHTTP.
 ## Version 0.0.7
 * BUGFIX: Erroneous dereferences and processings of PCBs due to context switches in ESP32:
 * BUGFIX: Repeated acception of a PCB from lwip.

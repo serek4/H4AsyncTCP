@@ -30,8 +30,8 @@ extern "C"{
 // https://lists.nongnu.org/archive/html/lwip-users/2010-03/msg00142.html "Listening connection issue"
 
 static err_t _raw_accept(void *arg, struct tcp_pcb *p, err_t err){
-   H4AsyncClient::_heapLO=(_HAL_freeHeap() * H4T_HEAP_CUTOUT_PC) / 100;
-   H4AsyncClient::_heapHI=(_HAL_freeHeap() * H4T_HEAP_CUTIN_PC) / 100;
+//    H4AsyncClient::_heapLO=(_HAL_freeHeap() * H4T_HEAP_CUTOUT_PC) / 100;
+//    H4AsyncClient::_heapHI=(_HAL_freeHeap() * H4T_HEAP_CUTIN_PC) / 100;
    static bool bakov = false;
 
 
@@ -39,13 +39,13 @@ static err_t _raw_accept(void *arg, struct tcp_pcb *p, err_t err){
     if ((err != ERR_OK) || (p == NULL))
         return ERR_VAL;
 
-    if (fh < H4AsyncClient::_heapLO || (bakov && (fh < H4AsyncClient::_heapHI))){
+    if (fh < H4AT_HEAP_THROTTLE_LO || (bakov && (fh < H4AT_HEAP_THROTTLE_HI))){
         Serial.printf("LOW HEAP %u DISCARDING %p\n",fh,p);
         bakov = true;
         return ERR_MEM; // It auto aborts if we return other than ERR_OK
     }
 
-    assert(fh >= H4AsyncClient::_heapHI);
+    assert(fh >= H4AT_HEAP_THROTTLE_HI);
     bakov = false;
 
 #if ARDUINO_ARCH_ESP32
