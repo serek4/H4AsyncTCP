@@ -121,6 +121,11 @@ typedef struct {
     size_t size;
     uint8_t apiflags;
 } tcp_api_call_t;
+struct TXData {
+    H4AsyncClient* c;
+    const uint8_t* data;
+    size_t size;
+};
 
 void H4AsyncClient::printState(std::string context){
     H4AT_PRINT2("%s\tpcb=%p s=%d \"%s\"\n", context.c_str(), pcb, pcb->state, (pcb->state >= CLOSED && pcb->state <=TIME_WAIT)? tcp_state_str[pcb->state]:"???");
@@ -349,6 +354,9 @@ static err_t _tcp_write_api(void *api_call_params){
     else {
         err=tcp_output(params->pcb);
         if(err) H4AT_PRINT1("ERR %d after output H=%u sb=%d Q=%d\n",err,_HAL_freeHeap(),tcp_sndbuf(params->pcb),tcp_sndqueuelen(params->pcb));
+        // else
+        // params->pcb->
+        // TXData* td = new TXData{params->c,params->data,params->size}; [ ] // Replace all args with td??
     }
     return err;
 }
@@ -551,7 +559,7 @@ std::string H4AsyncClient::remoteIPstring(){ return std::string(remoteIP().toStr
 uint16_t H4AsyncClient::remotePort(){ return pcb->remote_port;  }
 
 void H4AsyncClient::TX(const uint8_t* data,size_t len,bool copy){ 
-    H4AT_PRINT2("TX pcb=%p data=%p len=%d copy=%d left=%d max=%d\n",pcb,data,len,copy, maxPacket());
+    H4AT_PRINT2("TX pcb=%p data=%p len=%d copy=%d max=%d\n",pcb,data,len,copy, maxPacket());
     if(!_closing){
         uint8_t flags;
         size_t  sent=0;
