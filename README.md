@@ -3,6 +3,8 @@
 # H4AsyncTCP
 
 ## ArduinoIDE library: Asynchronous TCP Rx/Tx Client and abstract Asynchronous server
+## Version 0.0.9
+* Fixes sending large data on ESP8266, where data is chucked up. (Specializes 0.0.7 while loop)
 ## Version 0.0.8
 * Fixes Out of memory handling mechanism.
 * Prepares for ArmadilloHTTP.

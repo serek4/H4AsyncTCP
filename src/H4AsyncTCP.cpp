@@ -607,8 +607,10 @@ void H4AsyncClient::TX(const uint8_t* data,size_t len,bool copy){
                     H4AT_PRINT2("Write TIMEOUT: %d\n", millis() - _lastSeen);
                     return; // Discard the rest of the data.
                 }
+#if H4AS_QUQUE_ON_WRITE_TIMEOUT
                 h4.queueFunction([this,data,len,copy,left,sent](){ TX(data+sent/*== data+len-left*/,left,copy);});
                 return;
+#endif
             }
         }
     } else H4AT_PRINT1("%p _TX called during close!\n",this);
