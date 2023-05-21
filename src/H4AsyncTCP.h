@@ -109,16 +109,28 @@ using H4AT_FN_ERROR     =std::function<bool(int,int)>;
 using H4AT_FN_RXDATA    =std::function<void(const uint8_t* data, size_t len)>;
 
 class H4AsyncClient {
+                err_t               __TX(const uint8_t* data,size_t len,bool copy=true, uint8_t* copied_data=nullptr);
+                err_t               __shutdown(bool aborted=false);
+                err_t               __connect(tcp_pcb* pcb = nullptr);
+        static  void                __assignServer(H4AsyncClient* client, tcp_pcb* pcb);
                 void                _parseURL(const std::string& url);
+#if NO_SYS == 0
+        friend  err_t               _tcp_tx_api(struct tcpip_api_call_data *api_call_params);
+        friend  err_t               _tcp_connect_api(struct tcpip_api_call_data *api_call_params);
+        friend  err_t               _tcp_shutdown_api(struct tcpip_api_call_data *api_call_params);
+        friend  err_t               _assignServer(struct tcpip_api_call_data *api_call_params);
+#endif
+
     protected:
                 H4AT_FN_RXDATA      _rxfn=[](const uint8_t* data,size_t len){ Serial.printf("RXFN SAFETY\n"); dumphex(data,len); };
     public:
         static  std::unordered_set<H4AsyncClient*> openConnections;
         static  std::unordered_set<H4AsyncClient*> unconnectedClients;
 
-        void printState(std::string context);
-        static void retryClose(H4AsyncClient* c,tcp_pcb* pcb);
-        static void checkPCBs(std::string context, int cxt = 0, bool forceprint=false){
+                void                printState(std::string context);
+        static  void                __retryClose(H4AsyncClient* c,tcp_pcb* pcb);
+        static  void                retryClose(H4AsyncClient* c,tcp_pcb* pcb);
+        static  void                checkPCBs(std::string context, int cxt = 0, bool forceprint=false){
             static int count = 0;
             static int active = 0;
             if (cxt > 0) active++;
@@ -157,7 +169,7 @@ class H4AsyncClient {
                 H4_FN_VOID          _cbDisconnect;
                 H4_FN_VOID          _cbConnectFail;
                 H4AT_FN_ERROR       _cbError=[](int e,int i){ return true; }; // return false to avoid auto-shutdown
-                H4_FN_VOID          _cbDelete;
+                // H4_FN_VOID          _cbDelete;
                 bool                _closing=false;
         static  H4_INT_MAP          _errorNames;
         //   size_t              _heapLO;
@@ -169,11 +181,7 @@ class H4AsyncClient {
                 size_t              _stored=0;
 
         H4AsyncClient(tcp_pcb* p=0);
-        virtual ~H4AsyncClient(){
-                    H4AT_PRINT2("H4AsyncClient DTOR %p pcb=%p _bpp=%p\n", this, pcb, _bpp);
-                    if (_cbDelete)
-                _cbDelete();
-        }
+        virtual ~H4AsyncClient(){ H4AT_PRINT2("H4AsyncClient DTOR %p pcb=%p _bpp=%p\n", this, pcb, _bpp); }
                 void                close(){ _shutdown(); }
                 void                connect(const std::string& host,uint16_t port);
                 void                connect(IPAddress ip,uint16_t port);
@@ -195,12 +203,11 @@ class H4AsyncClient {
                 void                onConnectFail(H4_FN_VOID cb){ _cbConnectFail=cb; }
                 void                onError(H4AT_FN_ERROR cb){ _cbError=cb; }
                 void                onRX(H4AT_FN_RXDATA f){ _rxfn=f; }
-                void                onDelete(H4_FN_VOID cb){ _cbDelete=cb; }
                 uint32_t            remoteAddress();
                 IPAddress           remoteIP();
                 std::string         remoteIPstring();
                 uint16_t            remotePort();
-                void                TX(const uint8_t* d,size_t len,bool copy=true);
+                void                TX(const uint8_t* d,size_t len,bool copy=true, uint8_t* copied_data=nullptr); // Don't provide copied_data - it's for internal use only
 
 // syscalls - just don't...
                 uint8_t*            _addFragment(const uint8_t* data,u16_t len);

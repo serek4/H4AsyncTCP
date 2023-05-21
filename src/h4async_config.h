@@ -31,17 +31,21 @@ SOFTWARE.
 
     4 - a lot
 */
-#define H4AT_DEBUG 0
+#define H4AT_DEBUG 2
 
 #ifdef ARDUINO_ARCH_ESP32
-#define H4AS_QUEUE_ON_WRITE_TIMEOUT true
+#define H4AS_QUQUE_ON_CANNOT_WRITE  true // Might hook to NO_SYS
 #else
-#define H4AS_QUEUE_ON_WRITE_TIMEOUT false
+#define H4AS_QUQUE_ON_CANNOT_WRITE  false
 #endif
 #define H4AS_SCAVENGE_FREQ 20000
 
-#if H4AS_QUQUE_ON_WRITE_TIMEOUT
+#if H4AS_QUQUE_ON_CANNOT_WRITE
 #define H4AS_WRITE_TIMEOUT 10000
 #else
 #define H4AS_WRITE_TIMEOUT 3000
+#endif
+
+#if NO_SYS == 0
+#define H4AS_RTOS_GET_THREAD_NAME   pcTaskGetName(NULL)
 #endif
