@@ -121,11 +121,7 @@ typedef struct {
     size_t size;
     uint8_t apiflags;
 } tcp_api_call_t;
-struct TXData {
-    H4AsyncClient* c;
-    const uint8_t* data;
-    size_t size;
-};
+
 #if NO_SYS == 0
 typedef struct {
     H4AsyncClient* c;
@@ -145,7 +141,6 @@ typedef struct {
     tcp_pcb* pcb;
 } tcp_pcb_api_call_t;
 
-// #if ARDUINO_ARCH_ESP32 (Because of API differenes) (as _tcp_write_api)
 err_t _tcp_tx_api(struct tcpip_api_call_data *api_call_params){
     H4AT_PRINT2("_tcp_tx_api\n");
     auto params = (tcp_tx_api_call_t *)api_call_params;
@@ -199,6 +194,78 @@ err_t _assignServer(struct tcpip_api_call_data* p){
     return ERR_OK;
 }
 
+void H4AsyncClient::retryClose(H4AsyncClient* c,tcp_pcb *pcb)
+{
+    if (strcmp(H4AS_RTOS_GET_THREAD_NAME, TCPIP_THREAD_NAME) == 0){
+        __retryClose(c,pcb);
+    }
+    else {
+        tcp_pcb_api_call_t call_data {c,pcb};
+        tcpip_api_call(_tcp_retryclose_api, (tcpip_api_call_data*)&call_data);
+    }
+    // Check the state of the connection
+}
+
+void H4AsyncClient::_shutdown(bool aborted){
+    H4AT_PRINT1("_shutdown %p %d %s\n",this,aborted, pcTaskGetName(NULL));
+    if ((pcb && aborted) || (strcmp(H4AS_RTOS_GET_THREAD_NAME, TCPIP_THREAD_NAME)==0))// No need to sync with tcpip_thread, all is internal management.|| Or we're in the tcpip_thread
+    {
+        __shutdown(aborted); 
+        return;
+    }
+    tcp_bool_api_call_t call_data {this, aborted};
+    tcpip_api_call(_tcp_shutdown_api, (tcpip_api_call_data*)&call_data);
+}
+
+void H4AsyncClient::_connect() {
+    H4AT_PRINT2("_connect p=%p state=%d\n",pcb, pcb ? pcb->state : -1);
+    err_t err = ERR_OK;
+    if (strcmp(H4AS_RTOS_GET_THREAD_NAME, TCPIP_THREAD_NAME)==0) {
+        if(!pcb) pcb=tcp_new();
+        err = __connect(pcb);
+    }
+    else {
+        tcp_pcb_api_call_t params{this,pcb};
+        tcpip_api_call(_tcp_connect_api, (struct tcpip_api_call_data*)&params);
+    }
+    _notify(err);
+}
+
+void H4AsyncClient::TX(const uint8_t* data,size_t len,bool copy, uint8_t* copy_data){ 
+    H4AT_PRINT1("TX pcb=%p data=%p len=%d copy=%d max=%d\n",pcb,data,len,copy, maxPacket());
+    if (strcmp(H4AS_RTOS_GET_THREAD_NAME, TCPIP_THREAD_NAME)==0) {
+        __TX(data,len,copy,copy_data);
+        return;
+    }
+    tcp_tx_api_call_t call_data{this,data,len,copy};
+
+    auto err = tcpip_api_call(_tcp_tx_api,(struct tcpip_api_call_data*)&call_data);
+    if (err) H4AT_PRINT1("ERR %d \"%s\"\n",err, errorstring(err).c_str());
+}
+
+#else
+
+void H4AsyncClient::retryClose(H4AsyncClient* c,tcp_pcb *pcb)
+{
+    __retryClose(c,pcb);
+    // Check the state of the connection
+}
+
+void H4AsyncClient::_shutdown(bool aborted){
+    H4AT_PRINT1("_shutdown %p %d\n",this,aborted);
+    __shutdown(aborted);
+}
+
+void H4AsyncClient::_connect() {
+    H4AT_PRINT2("_connect p=%p state=%d\n",pcb, pcb ? pcb->state : -1);
+    if(!pcb) pcb=tcp_new();
+    _notify(__connect());
+}
+
+void H4AsyncClient::TX(const uint8_t* data,size_t len,bool copy, uint8_t* copy_data){ 
+    H4AT_PRINT1("TX pcb=%p data=%p len=%d copy=%d max=%d\n",pcb,data,len,copy, maxPacket());
+    __TX(data,len,copy);
+}
 #endif
 void H4AsyncClient::printState(std::string context){
     H4AT_PRINT2("%s\tpcb=%p s=%d \"%s\"\n", context.c_str(), pcb, pcb->state, (pcb->state >= CLOSED && pcb->state <=TIME_WAIT)? tcp_state_str[pcb->state]:"???");
@@ -219,6 +286,7 @@ void H4AsyncClient::__retryClose(H4AsyncClient* c,tcp_pcb *pcb)
         return false;
     };
 
+    // [ ] Is this neccessary ??
     // If there's another client with this pcb, don't close it, and NULLify the PCB for not closing it again at SCAVENGE
     if (checkOtherOwners(openConnections)){
         if (std::find(openConnections.begin(), openConnections.end(), c) != openConnections.end())
@@ -247,42 +315,16 @@ void H4AsyncClient::__retryClose(H4AsyncClient* c,tcp_pcb *pcb)
     }
     
 }
-void H4AsyncClient::retryClose(H4AsyncClient* c,tcp_pcb *pcb)
-{
-#if NO_SYS
-    __retryClose(c,pcb);
-#else
-    if (strcmp(H4AS_RTOS_GET_THREAD_NAME, TCPIP_THREAD_NAME) == 0){
-        __retryClose(c,pcb);
-    }
-    else {
-        tcp_pcb_api_call_t call_data {c,pcb};
-        tcpip_api_call(_tcp_retryclose_api, (tcpip_api_call_data*)&call_data);
-    }
-#endif
-    // Check the state of the connection
-}
 
 void H4AsyncClient::_notify(int e,int i) { 
-    if(e) if (_cbError(e,i)) _shutdown(e==ERR_ABRT/*  || e==ERR_CONN */); // ERR_CONN due to ESP32 multithreading calls
-    /* "The "myclose()" function is not a simple call to tcp_close(pcb) because
-    it may fail and you need to retry later by means of the poll callback or
-    your own method."
-    https://lists.nongnu.org/archive/html/lwip-users/2016-01/msg00020.html
-    */
+    if(e) if (_cbError(e,i)) _shutdown(e==ERR_ABRT);
 }
+
 err_t H4AsyncClient::__shutdown(bool aborted){
     H4AT_PRINT1("__shutdown %p\n",this);
     _closing=true;
     _lastSeen=0;
     if(pcb){
-#if 0
-        std::string context = "SHUTDOWN";
-        context.push_back(' ');
-        if (aborted)
-            context += "(ABORTED)";
-        printState(context);
-#endif
         H4AT_PRINT1("RAW 1 PCB=%p STATE=%d \"%s\"\n",pcb,pcb->state,(pcb->state >= CLOSED && pcb->state <=TIME_WAIT)? tcp_state_str[pcb->state]:"???");
         _clearDanglingInput();
         if (aborted || pcb->state > TIME_WAIT || pcb->state < CLOSED){
@@ -343,58 +385,35 @@ err_t H4AsyncClient::__shutdown(bool aborted){
     }
     return ERR_OK;
 }
-void H4AsyncClient::_shutdown(bool aborted){
-    H4AT_PRINT1("_shutdown %p %d %s\n",this,aborted, pcTaskGetName(NULL));
-#if NO_SYS
-    __shutdown(aborted);
-#else
-
-    if ((pcb && aborted) || (strcmp(H4AS_RTOS_GET_THREAD_NAME, TCPIP_THREAD_NAME)==0))// No need to sync with tcpip_thread, all is internal management.|| Or we're in the tcpip_thread
-    {
-        __shutdown(aborted); 
-        return;
-    }
-    tcp_bool_api_call_t call_data {this, aborted};
-    tcpip_api_call(_tcp_shutdown_api, (tcpip_api_call_data*)&call_data);
-#endif
-}
 
 void _raw_error(void *arg, err_t err){
+    auto fn = [arg,err](){
+        auto c=reinterpret_cast<H4AsyncClient*>(arg);
+        H4AT_PRINT1("CONNECTION %p *ERROR* pcb=%p err=%d\n",arg,c->pcb, err);
+        // if (!err) c->pcb=NULL;  // _shutdown() will be called by _notify() if there's an err and pcb will be set to NULL
+        auto it=H4AsyncClient::openConnections.find(c);
+        auto it2=H4AsyncClient::unconnectedClients.find(c);
+        if (it != H4AsyncClient::openConnections.end() || it2 != H4AsyncClient::unconnectedClients.end()) // has not been deleted.
+            c->_notify(err);
+    };
 #if NO_SYS  // To offloed the call to a new main loop iteration
-    h4.queueFunction([arg,err]{
-#endif
-    auto c=reinterpret_cast<H4AsyncClient*>(arg);
-    H4AT_PRINT1("CONNECTION %p *ERROR* pcb=%p err=%d\n",arg,c->pcb, err);
-    // if (!err) c->pcb=NULL;  // _shutdown() will be called by _notify() if there's an err and pcb will be set to NULL
-    auto it=H4AsyncClient::openConnections.find(c);
-    auto it2=H4AsyncClient::unconnectedClients.find(c);
-    if (it != H4AsyncClient::openConnections.end() || it2 != H4AsyncClient::unconnectedClients.end()) // has not been deleted.
-        c->_notify(err);
-#if NO_SYS
-    });
+    h4.queueFunction(fn);
+#else
+    fn();
 #endif
 }
 
 err_t _raw_recv(void *arg, struct tcp_pcb *tpcb, struct pbuf *p, err_t err){
     H4AT_PRINT1("_raw_recv %p tpcb=%p p=%p err=%d data=%p tot_len=%d\n",arg,tpcb,p, err, p ? p->payload:0,p ? p->tot_len:0);
     auto rq=reinterpret_cast<H4AsyncClient*>(arg);
-    auto it=H4AsyncClient::openConnections.find(rq);
-    if (it == H4AsyncClient::openConnections.end()){ // has been deleted.
-        Serial.printf("HOOOW CAN THIS BE?\n");
-        return ERR_ABRT;
-    }
-    // Serial.printf("_raw_recv %p p=%p err=%d _closing=%d\n", tpcb, p, err, rq->_closing);
     if (p == NULL || rq->_closing || err!=ERR_OK) rq->_notify(ERR_CLSD,err); // * warn ...hanging data when closing?
     // https://lists.nongnu.org/archive/html/lwip-users/2016-01/msg00020.html
     else {
         auto cpydata=static_cast<uint8_t*>(malloc(p->tot_len));
         if(cpydata){
-            // memcpy(cpydata,p->payload,p->tot_len);
             pbuf_copy_partial(p,cpydata,p->tot_len,0); // instead of direct memcpy that only considers the first pbuf of the possible pbufs chain.
             auto cpyflags=p->flags;
             auto cpylen=p->tot_len;
-
-            // [ ] Might run at another context so tpcb might be invalid???
             tcp_recved(tpcb, p->tot_len);
             H4AT_PRINT2("* p=%p * FREE DATA %p %d 0x%02x bpp=%p\n",p,p->payload,p->tot_len,p->flags,rq->_bpp);
             err=ERR_OK;
@@ -424,22 +443,28 @@ err_t _raw_sent(void* arg,struct tcp_pcb *tpcb, u16_t len){
 }
 
 err_t _tcp_connected(void* arg, void* tpcb, err_t err){
-    h4.queueFunction([arg,tpcb,err]{
+    auto fn = [arg,tpcb,err](){
         H4AT_PRINT1("_tcp_connected %p %p e=%d\n",arg,tpcb,err);
         H4AsyncClient::checkPCBs("CONNECTED", 1);
         auto rq=reinterpret_cast<H4AsyncClient*>(arg);
         auto p=reinterpret_cast<tcp_pcb*>(tpcb);
-    #if H4AT_DEBUG
+#if H4AT_DEBUG
         IPAddress ip(ip_addr_get_ip4_u32(&p->remote_ip));
         H4AT_PRINT1("C=%p _tcp_connected p=%p e=%d IP=%s:%d\n",rq,tpcb,err,ip.toString().c_str(),p->remote_port);
-    #endif
+#endif
         H4AsyncClient::openConnections.insert(rq);
         H4AsyncClient::unconnectedClients.erase(rq);
         if(rq->_cbConnect) rq->_cbConnect();
         tcp_recv(p, &_raw_recv);
         // ***************************************************
         tcp_sent(p, &_raw_sent);
-    });
+    };
+
+#if NO_SYS // To offloed the call to a new main loop iteration
+    h4.queueFunction(fn);
+#else
+    fn();
+#endif
     return ERR_OK;
 }
 
@@ -451,44 +476,9 @@ void _tcp_dns_found(const char * name, struct ip_addr * ipaddr, void * arg) {
         p->_connect();
     } else p->_notify(H4AT_ERR_DNS_NF);
 }
-
-#ifdef ARDUINO_ARCH_ESP32
-static err_t _tcp_write_api(struct tcpip_api_call_data *api_call_params){
-#else
-static err_t _tcp_write_api(void *api_call_params){
-#endif
-    tcp_api_call_t * params = (tcp_api_call_t *)api_call_params;
-    auto c=reinterpret_cast<H4AsyncClient*>(params->c);
-    if (!c->pcb || c->pcb != params->pcb)
-    {
-        H4AT_PRINT2("BAD PCB %p %p\n",c->pcb,params->pcb);// [x] Double check this (Sample output: "BAD PCB 0x0 0x3ffe4834")
-        return pcb_deleted;
-    }
-    auto err = tcp_write(params->pcb, params->data, params->size, params->apiflags);
-
-    if(err) H4AT_PRINT1("ERR %d after write H=%u sb=%d Q=%d\n",err,_HAL_freeHeap(),tcp_sndbuf(params->pcb),tcp_sndqueuelen(params->pcb));
-    else {
-        err=tcp_output(params->pcb);
-        if(err) H4AT_PRINT1("ERR %d after output H=%u sb=%d Q=%d\n",err,_HAL_freeHeap(),tcp_sndbuf(params->pcb),tcp_sndqueuelen(params->pcb));
-        // else
-        // params->pcb->
-        // TXData* td = new TXData{params->c,params->data,params->size}; [ ] // Replace all args with td??
-    }
-    return err;
-}
-
-static err_t _tcp_write(H4AsyncClient* c,struct tcp_pcb* p,const uint8_t* data, size_t size, uint8_t apiflags) {
-    tcp_api_call_t params{c,p,data,size,apiflags};
-    #ifdef ARDUINO_ARCH_ESP32
-        return tcpip_api_call(_tcp_write_api, (struct tcpip_api_call_data*)&params);
-    #else
-        return _tcp_write_api((void*) &params);
-    #endif
-}
 //
 //
 //
-
 H4AsyncClient::H4AsyncClient(struct tcp_pcb *newpcb): pcb(newpcb){
 //    _heapLO=(_HAL_freeHeap() * H4T_HEAP_CUTOUT_PC) / 100;
 //    _heapHI=(_HAL_freeHeap() * H4T_HEAP_CUTIN_PC) / 100;
@@ -528,9 +518,9 @@ void H4AsyncClient::_clearDanglingInput() {
 err_t H4AsyncClient::__connect(tcp_pcb* pcb){
     if (pcb)
         this->pcb = pcb;
-    tcp_arg(pcb, this);
-    tcp_err(pcb, &_raw_error);
-    return tcp_connect(pcb, &_URL.addr, _URL.port,(tcp_connected_fn)&_tcp_connected);
+    tcp_arg(this->pcb, this);
+    tcp_err(this->pcb, &_raw_error);
+    return tcp_connect(this->pcb, &_URL.addr, _URL.port,(tcp_connected_fn)&_tcp_connected);
 }
 
 void H4AsyncClient::__assignServer(H4AsyncClient *client, tcp_pcb *pcb)
@@ -542,25 +532,6 @@ void H4AsyncClient::__assignServer(H4AsyncClient *client, tcp_pcb *pcb)
     tcp_recv(pcb, &_raw_recv);
     tcp_err(pcb, &_raw_error);
     tcp_sent(pcb, &_raw_sent);
-}
-
-void H4AsyncClient::_connect() {
-    H4AT_PRINT2("_connect p=%p state=%d\n",pcb, pcb ? pcb->state : -1);
-#if NO_SYS
-    if(!pcb) pcb=tcp_new();
-    auto err = __connect(pcb);
-#else
-    err_t err = ERR_OK;
-    if (strcmp(H4AS_RTOS_GET_THREAD_NAME, TCPIP_THREAD_NAME)==0) {
-        if(!pcb) pcb=tcp_new();
-        err = __connect(pcb);
-    }
-    else {
-        tcp_pcb_api_call_t params{this,pcb};
-        tcpip_api_call(_tcp_connect_api, (struct tcpip_api_call_data*)&params);
-    }
-#endif
-    _notify(err);
 }
 
 void  H4AsyncClient::_parseURL(const std::string& url){
@@ -703,8 +674,6 @@ void H4AsyncClient::nagle(bool enable){
 //     Serial.printf("NAGLE %s\n",enable?"ON":"OFF");
 // #if NO_SYS
 //     __nagle(enable);
-// #elif 1
-//     __nagle(enable);
 // #else
 //     Serial.printf("threadname = %s\n",H4AS_RTOS_GET_THREAD_NAME);
 //     if (strcmp(H4AS_RTOS_GET_THREAD_NAME, TCPIP_THREAD_NAME)==0) {
@@ -737,23 +706,8 @@ err_t H4AsyncClient::__TX(const uint8_t* data,size_t len,bool copy, uint8_t* cop
         size_t  left=len;
 
         while(left){
-// // Might short this block to an OS-based macro: 
-// // #if NO_SYS == 0 
-//             if (!pcb || (pcb->state != ESTABLISHED) &&
-//                             (pcb->state != CLOSE_WAIT) &&
-//                             (pcb->state != SYN_SENT) &&
-//                             (pcb->state != SYN_RCVD))
-//             { // ESP32 switch context, we might being in this loop --> switch context --> TCP disconnection --> NULLs the PCB --> return to this context --> crash
-//                 if (!pcb)
-//                     H4AT_PRINT1("NULL PCB!\n");
-//                 else
-//                     printState("TX WRONG STATE!\n"); // It has been freed previously by another thread.
-//                 break;
-//             }
-// // #endif
             size_t available=tcp_sndbuf(pcb);
             // Serial.printf("Av=%d QL=%d\n",available,tcp_sndqueuelen(pcb));
-            // printState("TX");
             if(available && (tcp_sndqueuelen(pcb) < TCP_SND_QUEUELEN )){
                 auto chunk=std::min(left,available);
                 flags=copy ? TCP_WRITE_FLAG_COPY:0;
@@ -767,42 +721,38 @@ err_t H4AsyncClient::__TX(const uint8_t* data,size_t len,bool copy, uint8_t* cop
                 }
                 if (err) {
                     H4AT_PRINT1("ERR %d after write H=%u sb=%d Q=%d\n", err, _HAL_freeHeap(), tcp_sndbuf(pcb), tcp_sndqueuelen(pcb));
-                    _notify(err,44); // [x] ((FIXED)) POTENTIAL ERROR SOURCE When err==-11 (ERR_CONN) --> it's because the PCB has been freed by another thread.
-                    // break;
-                    return err;
+                    _notify(err,44);
+                    if (copy_data) free(copy_data);
+                    return err; // [x] copy_data is not freed (Better manage it..)
                 }
                 else {
                     sent+=chunk;
                     left-=chunk;
                 }
-/*                 if(auto err=_tcp_write(this,pcb,data+sent,chunk,flags)){
-                    _notify(err,44); // [x] ((FIXED)) POTENTIAL ERROR SOURCE When err==-11 (ERR_CONN) --> it's because the PCB has been freed by another thread.
-                    break;
-                } else {
-                    sent+=chunk;
-                    left-=chunk;
-                } */
-            } 
+            }
             else {
-                /* [x] Solve an error where it's stuck here, because of unspecified error. */
                 H4AT_PRINT1("Cannot write: available=%d QL=%d\n",available,tcp_sndqueuelen(pcb));
                 _HAL_feedWatchdog();
                 yield();
 
-                if (millis() - _lastSeen > H4AS_WRITE_TIMEOUT) {
+                if (millis() - _lastSeen > H4AS_WRITE_TIMEOUT) { // [ ] Comparing to _lastSeen is not correct, probably it wasn't seen before the TX call by a duration of H4AS_WRITE_TIMEOUT.
                     _shutdown();
                     H4AT_PRINT2("Write TIMEOUT: %d\n", millis() - _lastSeen);
                     if (copy_data) free(copy_data);
                     return ERR_TIMEOUT; // Discard the rest of the data.
                 }
 #if H4AS_QUQUE_ON_CANNOT_WRITE
-                // [ ] Might improve mbx to utilize shared_ptr
-                // [ ] if copy flag, then copy the data itself and manage it...
-                if (!copy_data && copy) {
-                    copy_data = (uint8_t *)malloc(left);
-                    memcpy(copy_data, data + sent, left);
+                // [x] if copy flag, then copy the data itself and manage it...
+                // [ ] TEST
+                uint8_t *newdata = const_cast<uint8_t*>(data)+sent;
+                if (copy){
+                    if (!copy_data) { // Just copy the data once per TX user call.
+                        newdata = (uint8_t *)malloc(left);
+                        memcpy(newdata, data + sent, left);
+                        copy_data = newdata;
+                    }
                 }
-                h4.queueFunction([this,data,len,copy,left,sent,copy_data](){ TX(data+sent/*== data+len-left*/,left,copy,copy_data);});
+                h4.queueFunction([this,newdata,left,copy,copy_data](){ TX(newdata,left,copy,copy_data);});
                 return ERR_OK;
 #endif
             }
@@ -811,21 +761,4 @@ err_t H4AsyncClient::__TX(const uint8_t* data,size_t len,bool copy, uint8_t* cop
     
     if (copy_data) free(copy_data);
     return ERR_OK;
-}
-
-
-void H4AsyncClient::TX(const uint8_t* data,size_t len,bool copy, uint8_t* copy_data){ 
-    H4AT_PRINT1("TX pcb=%p data=%p len=%d copy=%d max=%d\n",pcb,data,len,copy, maxPacket());
-#if NO_SYS
-    __TX(data,len,copy);
-#else
-    if (strcmp(H4AS_RTOS_GET_THREAD_NAME, TCPIP_THREAD_NAME)==0) {
-        __TX(data,len,copy,copy_data);
-        return;
-    }
-    tcp_tx_api_call_t call_data{this,data,len,copy};
-
-    auto err = tcpip_api_call(_tcp_tx_api,(struct tcpip_api_call_data*)&call_data);
-    if (err) H4AT_PRINT1("ERR %d \"%s\"\n",err, errorstring(err).c_str());
-#endif
 }

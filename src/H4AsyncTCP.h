@@ -66,7 +66,6 @@ enum {
     H4AT_OUTPUT_TOO_BIG,
     H4AT_MAX_ERROR
 };
-constexpr err_enum_t pcb_deleted = (err_enum_t)-20;
 #if H4AT_DEBUG
     #define H4AT_PRINTF(...) Serial.printf(__VA_ARGS__)
     template<int I, typename... Args>
@@ -141,7 +140,7 @@ class H4AsyncClient {
             for(auto& c:openConnections) total_active += c->pcb != nullptr;
             for(auto& c:unconnectedClients) total_active += c->pcb != nullptr;
             if (active != total_active) {
-                H4AT_PRINT2("ERROR: active=%d total_active=%d\n", active, total_active);
+                H4AT_PRINT1("ERROR: active=%d total_active=%d\n", active, total_active);
             }
 #if H4AT_DEBUG > 1
             H4AT_PRINTF("%s PCBs:\t",context.c_str());
@@ -169,7 +168,6 @@ class H4AsyncClient {
                 H4_FN_VOID          _cbDisconnect;
                 H4_FN_VOID          _cbConnectFail;
                 H4AT_FN_ERROR       _cbError=[](int e,int i){ return true; }; // return false to avoid auto-shutdown
-                // H4_FN_VOID          _cbDelete;
                 bool                _closing=false;
         static  H4_INT_MAP          _errorNames;
         //   size_t              _heapLO;

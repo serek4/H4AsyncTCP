@@ -22,7 +22,7 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 */
-#define H4AT_VERSION "0.0.9"
+#define H4AT_VERSION "0.0.10"
 /*
     Debug levels: 
     0 - No debug messages, no debug functions
@@ -31,21 +31,14 @@ SOFTWARE.
 
     4 - a lot
 */
-#define H4AT_DEBUG 2
-
-#ifdef ARDUINO_ARCH_ESP32
-#define H4AS_QUQUE_ON_CANNOT_WRITE  true // Might hook to NO_SYS
-#else
-#define H4AS_QUQUE_ON_CANNOT_WRITE  false
-#endif
+#define H4AT_DEBUG 0
 #define H4AS_SCAVENGE_FREQ 20000
 
-#if H4AS_QUQUE_ON_CANNOT_WRITE
+#if NO_SYS
+#define H4AS_QUQUE_ON_CANNOT_WRITE  false
 #define H4AS_WRITE_TIMEOUT 10000
 #else
+#define H4AS_QUQUE_ON_CANNOT_WRITE  true
 #define H4AS_WRITE_TIMEOUT 3000
-#endif
-
-#if NO_SYS == 0
-#define H4AS_RTOS_GET_THREAD_NAME   pcTaskGetName(NULL)
+#define H4AS_RTOS_GET_THREAD_NAME   pcTaskGetName(NULL) // For FreeRTOS (ESP32)
 #endif

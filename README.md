@@ -3,6 +3,12 @@
 # H4AsyncTCP
 
 ## ArduinoIDE library: Asynchronous TCP Rx/Tx Client and abstract Asynchronous server
+## Version 0.0.10
+* Corrects the way it works on ESP32, by the correct usage of lwip in OS Mode.
+* Enhances the quality of code and splitting to ESP8266/ESP32
+* SHOULD work on any environment which supports lwip natively, NOT TESTED.
+* Some operations got added, but not tested:
+  * For OS Mode in "Cannot Write" mode and further needs to be queued at another loop, if copy flag is provided then the code just copies it.
 ## Version 0.0.9
 * Fixes sending large data on ESP8266, where data is chucked up. (Specializes 0.0.7 while loop)
 ## Version 0.0.8
