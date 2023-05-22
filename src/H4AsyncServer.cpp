@@ -32,12 +32,32 @@ extern "C"{
 #endif
 // https://lists.nongnu.org/archive/html/lwip-users/2010-03/msg00142.html "Listening connection issue"
 
-static void __initiate(void *arg, struct tcp_pcb *p, err_t err){
+static err_t _raw_accept(void *arg, struct tcp_pcb *p, err_t err){
+    static bool bakov = false;
     H4AT_PRINT1("RAW _raw_accept <-- arg=%p p=%p e=%d state=%d\n",arg,p,err,p->state);
+    if ((err != ERR_OK) || (p == NULL))
+        return ERR_VAL;
+    auto checkMemory = [](const H4AsyncServer& srv) {
+        auto fh=_HAL_freeHeap();
+        auto _heapLO = H4AT_HEAP_THROTTLE_LO + srv._heap_alloc;
+        auto _heapHI = H4AT_HEAP_THROTTLE_HI + srv._heap_alloc;
+        H4AT_PRINT4("FREE HEAP %u LOW %u HIGH %u BKV %d\n",fh,_heapLO,_heapHI,bakov);
+        if (fh < _heapLO || (bakov && (fh < _heapHI))){
+            bakov = true;
+            return;
+        }
+        bakov = false;
+    };
+
     if(!err){
         tcp_setprio(p, TCP_PRIO_MIN); // postpone it and check the server for priority ...?
         H4AT_PRINT1("Remote IP %s\n", ipaddr_ntoa(&p->remote_ip)); // Could check the the validity of the IP address
         auto srv=reinterpret_cast<H4AsyncServer*>(arg);
+        checkMemory(*srv);
+        if (bakov) {
+            H4AT_PRINT1("LOW HEAP %u DISCARDING %p\n",_HAL_freeHeap(),p);
+            return ERR_MEM;
+        }
         auto c=srv->_instantiateRequest(p);
         H4AT_PRINT1("NEW CONNECTION %p --> pcb=%p state=%d\n",c,p,p->state);
         if(c){
@@ -60,26 +80,6 @@ static void __initiate(void *arg, struct tcp_pcb *p, err_t err){
         } else H4AT_PRINT1("_instantiateRequest returns WRONG VALUE !!!!! p=%p c=%p\n",p,c); // Might abort/close the connection
     } // else H4AT_PRINT1("RAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAW %d\n",err);
 
-}
-static err_t _raw_accept(void *arg, struct tcp_pcb *p, err_t err){
-//    H4AsyncClient::_heapLO=(_HAL_freeHeap() * H4T_HEAP_CUTOUT_PC) / 100;
-//    H4AsyncClient::_heapHI=(_HAL_freeHeap() * H4T_HEAP_CUTIN_PC) / 100;
-   static bool bakov = false;
-    H4AT_PRINT1("RAW _raw_accept <-- arg=%p p=%p e=%d state=%d\n",arg,p,err,p->state);
-
-    auto fh=_HAL_freeHeap();
-    if ((err != ERR_OK) || (p == NULL))
-        return ERR_VAL;
-
-    if (fh < H4AT_HEAP_THROTTLE_LO || (bakov && (fh < H4AT_HEAP_THROTTLE_HI))){
-        Serial.printf("LOW HEAP %u DISCARDING %p\n",fh,p);
-        bakov = true;
-        return ERR_MEM; // It auto aborts if we return other than ERR_OK
-    }
-
-    assert(fh >= H4AT_HEAP_THROTTLE_HI);
-    bakov = false;
-    __initiate(arg,p,err);
     return ERR_OK;
 }
 //

@@ -44,6 +44,7 @@ extern "C"{
 
 std::unordered_set<H4AsyncClient*> H4AsyncClient::openConnections;
 std::unordered_set<H4AsyncClient*> H4AsyncClient::unconnectedClients;
+bool H4AsyncClient::_scavenging = false;
 
 H4_INT_MAP H4AsyncClient::_errorNames={
 #if H4AT_DEBUG
@@ -327,13 +328,7 @@ err_t H4AsyncClient::__shutdown(bool aborted){
     if(pcb){
         H4AT_PRINT1("RAW 1 PCB=%p STATE=%d \"%s\"\n",pcb,pcb->state,(pcb->state >= CLOSED && pcb->state <=TIME_WAIT)? tcp_state_str[pcb->state]:"???");
         _clearDanglingInput();
-        if (aborted || pcb->state > TIME_WAIT || pcb->state < CLOSED){
-            if (aborted)
-                H4AT_PRINT1("ABORTED CONNECTION\n");
-            else
-                H4AT_PRINT1("H4AT Wrong state on Shutdown!\n"); // There's an occurance of this source of error
-        }
-        else
+        if (!aborted)
         {
             H4AT_PRINT1("RAW 2 clean STATE=%d\n",pcb->state);
             tcp_arg(pcb, NULL);
@@ -376,6 +371,8 @@ err_t H4AsyncClient::__shutdown(bool aborted){
 
         H4AT_PRINT1("*********** NULL IT\n");
         pcb=NULL; // == eff = reset;
+        if (!_scavenging)
+            h4.queueFunction([](){H4AsyncClient::__scavenge();});
         checkPCBs("SHUTDOWN", -1);
     }
     else
@@ -534,6 +531,32 @@ void H4AsyncClient::__assignServer(H4AsyncClient *client, tcp_pcb *pcb)
     tcp_sent(pcb, &_raw_sent);
 }
 
+void H4AsyncClient::__scavenge()
+{
+    H4AT_PRINT1("SCAVENGE CONNECTIONS! oc=%u uc=%u\n", openConnections.size(), unconnectedClients.size());
+    _scavenging = true;
+    std::vector<H4AsyncClient*> tbd;
+    // Nullified PCBs are not really needed to check, as __shutdown() will reset _lastSeen.
+    for(auto &oc:openConnections){
+        H4AT_PRINT1("T=%u OC %p ls=%u age(s)=%u SCAV=%u PCB=%p\n",millis(),oc,oc->_lastSeen,(millis() - oc->_lastSeen) / 1000,H4AS_SCAVENGE_FREQ, oc->pcb);
+        if((millis() - oc->_lastSeen) > H4AS_SCAVENGE_FREQ || !(oc->pcb)) tbd.push_back(oc);
+    }
+    for(auto &uc:unconnectedClients){
+        H4AT_PRINT1("T=%u UC %p ct=%u age(s)=%u SCAV=%u\n",millis(),uc,uc->_creatTime,(millis() - uc->_creatTime) / 1000,H4AS_SCAVENGE_FREQ);
+        if((millis() - uc->_creatTime) > H4AS_SCAVENGE_FREQ) tbd.push_back(uc);
+    }
+    for(auto &rq:tbd) {
+        H4AT_PRINT1("Scavenging %p\n",rq); 
+            rq->_shutdown();
+        if (openConnections.count(rq))
+            openConnections.erase(rq);
+        else
+            unconnectedClients.erase(rq);
+        delete rq;
+    }
+    _scavenging = false;
+}
+
 void  H4AsyncClient::_parseURL(const std::string& url){
     if(url.find("http",0)) _parseURL(std::string("http://")+url);
     else {
@@ -601,27 +624,7 @@ void H4AsyncClient::_handleFragment(const uint8_t* data,u16_t len,u8_t flags) {
 void H4AsyncClient::_scavenge(){
     h4.every(
         H4AS_SCAVENGE_FREQ,
-        []{
-            H4AT_PRINT1("SCAVENGE CONNECTIONS! oc=%u uc=%u\n", openConnections.size(), unconnectedClients.size());
-            std::vector<H4AsyncClient*> tbd;
-            for(auto &oc:openConnections){
-                H4AT_PRINT1("T=%u OC %p ls=%u age(s)=%u SCAV=%u\n",millis(),oc,oc->_lastSeen,(millis() - oc->_lastSeen) / 1000,H4AS_SCAVENGE_FREQ);
-                if((millis() - oc->_lastSeen) > H4AS_SCAVENGE_FREQ) tbd.push_back(oc);
-            }
-            for(auto &uc:unconnectedClients){
-                H4AT_PRINT1("T=%u UC %p ct=%u age(s)=%u SCAV=%u\n",millis(),uc,uc->_creatTime,(millis() - uc->_creatTime) / 1000,H4AS_SCAVENGE_FREQ);
-                if((millis() - uc->_creatTime) > H4AS_SCAVENGE_FREQ) tbd.push_back(uc);
-            }
-            for(auto &rq:tbd) {
-                H4AT_PRINT1("Scavenging %p\n",rq); 
-                    rq->_shutdown();
-                if (openConnections.count(rq))
-                    openConnections.erase(rq);
-                else
-                    unconnectedClients.erase(rq);
-                delete rq;
-            }
-        },
+        []{H4AsyncClient::__scavenge();},
         nullptr,
         H4AT_SCAVENGER_ID,
         true

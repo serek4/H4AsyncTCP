@@ -112,6 +112,8 @@ class H4AsyncClient {
                 err_t               __shutdown(bool aborted=false);
                 err_t               __connect(tcp_pcb* pcb = nullptr);
         static  void                __assignServer(H4AsyncClient* client, tcp_pcb* pcb);
+        static  void                __scavenge();
+        static  bool                _scavenging;
                 void                _parseURL(const std::string& url);
 #if NO_SYS == 0
         friend  err_t               _tcp_tx_api(struct tcpip_api_call_data *api_call_params);
@@ -222,6 +224,7 @@ class H4AsyncServer {
     protected:
             uint16_t                _port;
     public:
+            size_t                _heap_alloc=0;
             H4AT_FN_ERROR        _srvError;
         H4AsyncServer(uint16_t port): _port(port){}
         virtual ~H4AsyncServer(){}
