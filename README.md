@@ -3,6 +3,10 @@
 # H4AsyncTCP
 
 ## ArduinoIDE library: Asynchronous TCP Rx/Tx Client and abstract Asynchronous server
+## Version 0.0.11
+* Fixes missing lwip configuration (NO_SYS) at `h4async_config.h`.
+* Feature: Scavenge a connection upon its shutdown, freeing memory faster.
+* Corrects and tests low memory protection for server new connections.
 ## Version 0.0.10
 * Corrects the way it works on ESP32, by the correct usage of lwip in OS Mode.
 * Enhances the quality of code and splitting to ESP8266/ESP32
