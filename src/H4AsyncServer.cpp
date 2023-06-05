@@ -25,16 +25,17 @@ SOFTWARE.
 #include<H4AsyncTCP.h>
 
 extern "C"{
-  #include "lwip/tcp.h"
+  #include "lwip/altcp.h"
+  #include "lwip/altcp_tcp.h"
 }
 #ifdef ARDUINO_ARCH_ESP32
     #include "lwip/priv/tcpip_priv.h"
 #endif
 // https://lists.nongnu.org/archive/html/lwip-users/2010-03/msg00142.html "Listening connection issue"
 
-static err_t _raw_accept(void *arg, struct tcp_pcb *p, err_t err){
+static err_t _raw_accept(void *arg, struct altcp_pcb *p, err_t err){
     static bool bakov = false;
-    H4AT_PRINT1("RAW _raw_accept <-- arg=%p p=%p e=%d state=%d\n",arg,p,err,p->state);
+    H4AT_PRINT1("RAW _raw_accept <-- arg=%p p=%p e=%d\n",arg,p,err);
     if ((err != ERR_OK) || (p == NULL))
         return ERR_VAL;
     auto checkMemory = [](const H4AsyncServer& srv) {
@@ -50,8 +51,8 @@ static err_t _raw_accept(void *arg, struct tcp_pcb *p, err_t err){
     };
 
     if(!err){
-        tcp_setprio(p, TCP_PRIO_MIN); // postpone it and check the server for priority ...?
-        H4AT_PRINT1("Remote IP %s\n", ipaddr_ntoa(&p->remote_ip)); // Could check the the validity of the IP address
+        altcp_setprio(p, TCP_PRIO_MIN); // postpone it and check the server for priority ...?
+        H4AT_PRINT1("Remote IP %s\n", ipaddr_ntoa(altcp_get_ip(p,0)));
         auto srv=reinterpret_cast<H4AsyncServer*>(arg);
         checkMemory(*srv);
         if (bakov) {
@@ -85,22 +86,25 @@ static err_t _raw_accept(void *arg, struct tcp_pcb *p, err_t err){
 //
 //      H4AsyncServer
 //
-H4AsyncClient*  H4AsyncServer::_instantiateRequest(struct tcp_pcb *p){
+H4AsyncClient*  H4AsyncServer::_instantiateRequest(struct altcp_pcb *p){
     auto c=new H4AsyncClient(p);
     return c;
 };
-
+// altcp_allocator_t* tcp_allocator = new altcp_allocator_t{altcp_tcp_alloc, nullptr};
 void H4AsyncServer::begin(){
 //    h4.every(1000,[]{ heap_caps_check_integrity_all(true); });
     H4AT_PRINT1("SERVER %p listening on port %d\n",this,_port);
-    auto _raw_pcb = tcp_new();
+    altcp_allocator_t alloc;
+    alloc.alloc=altcp_tcp_alloc;
+    alloc.arg = nullptr;
+    auto _raw_pcb = altcp_new(&alloc);
     if (_raw_pcb != NULL) {
         err_t err;
-        tcp_arg(_raw_pcb,this);
-        err = tcp_bind(_raw_pcb, IP_ADDR_ANY, _port);
+        altcp_arg(_raw_pcb,this);
+        err = altcp_bind(_raw_pcb, IP_ADDR_ANY, _port);
         if (err == ERR_OK) {
-            _raw_pcb = tcp_listen(_raw_pcb);
-            tcp_accept(_raw_pcb, _raw_accept);
+            _raw_pcb = altcp_listen(_raw_pcb);
+            altcp_accept(_raw_pcb, _raw_accept);
         } //else Serial.printf("RAW CANT BIND\n");
     } // else Serial.printf("RAW CANT GET NEW PCB\n");
 }

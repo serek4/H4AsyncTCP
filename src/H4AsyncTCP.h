@@ -99,7 +99,8 @@ enum {
     #define H4AT_DUMP4(...)
 #endif
 
-struct tcp_pcb;
+// struct tcp_pcb;
+struct altcp_pcb;
 
 class H4AsyncClient;
 
@@ -109,9 +110,9 @@ using H4AT_FN_RXDATA    =std::function<void(const uint8_t* data, size_t len)>;
 
 class H4AsyncClient {
                 err_t               __TX(const uint8_t* data,size_t len,bool copy=true, uint8_t* copied_data=nullptr);
-                err_t               __shutdown(bool aborted=false);
-                err_t               __connect(tcp_pcb* pcb = nullptr);
-        static  void                __assignServer(H4AsyncClient* client, tcp_pcb* pcb);
+                err_t               __shutdown();
+                err_t               __connect();
+        static  void                __assignServer(H4AsyncClient* client, altcp_pcb* pcb);
         static  void                __scavenge();
         static  bool                _scavenging;
                 void                _parseURL(const std::string& url);
@@ -129,8 +130,8 @@ class H4AsyncClient {
         static  std::unordered_set<H4AsyncClient*> unconnectedClients;
 
                 void                printState(std::string context);
-        static  void                __retryClose(H4AsyncClient* c,tcp_pcb* pcb);
-        static  void                retryClose(H4AsyncClient* c,tcp_pcb* pcb);
+        static  void                __retryClose(H4AsyncClient* c,altcp_pcb* pcb);
+        static  void                retryClose(H4AsyncClient* c,altcp_pcb* pcb);
         static  void                checkPCBs(std::string context, int cxt = 0, bool forceprint=false){
             static int count = 0;
             static int active = 0;
@@ -177,10 +178,10 @@ class H4AsyncClient {
                 uint32_t            _lastSeen=0;
                 uint32_t            _creatTime=0;
                 bool                _nagle=false;
-                struct tcp_pcb      *pcb;
+                struct altcp_pcb    *pcb;
                 size_t              _stored=0;
 
-        H4AsyncClient(tcp_pcb* p=0);
+        H4AsyncClient(altcp_pcb* p=0);
         virtual ~H4AsyncClient(){ H4AT_PRINT2("H4AsyncClient DTOR %p pcb=%p _bpp=%p\n", this, pcb, _bpp); }
                 void                close(){ _shutdown(); }
                 void                connect(const std::string& host,uint16_t port);
@@ -216,7 +217,7 @@ class H4AsyncClient {
                 void                _handleFragment(const uint8_t* data,u16_t len,u8_t flags);
                 void                _notify(int e,int i=0);
         static  void                _scavenge();
-                void                _shutdown(bool aborted = false);
+                void                _shutdown();
 
 };
 
@@ -234,5 +235,5 @@ class H4AsyncServer {
         virtual void        reset(){}
         virtual void        route(void* c,const uint8_t* data,size_t len)=0;
 
-        virtual H4AsyncClient* _instantiateRequest(struct tcp_pcb *p);
+        virtual H4AsyncClient* _instantiateRequest(struct altcp_pcb *p);
 };
