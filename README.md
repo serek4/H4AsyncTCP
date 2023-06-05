@@ -3,6 +3,10 @@
 # H4AsyncTCP
 
 ## ArduinoIDE library: Asynchronous TCP Rx/Tx Client and abstract Asynchronous server
+## altcp branch:
+Holds a working TCP over LwIP ALTCP on ESP32 - requires a custom [arduino-esp32 build](https://github.com/HamzaHajeir/arduino-esp32/tree/lwip-tls) that enables LwIP TCP.
+The goal is to fully support TLS over ALTCP_TLS port, which LwIP provides.
+
 ## Version 0.0.11
 * Fixes missing lwip configuration (NO_SYS) at `h4async_config.h`.
 * Feature: Scavenge a connection upon its shutdown, freeing memory faster.
