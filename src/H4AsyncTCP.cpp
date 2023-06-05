@@ -786,8 +786,10 @@ err_t H4AsyncClient::__TX(const uint8_t* data,size_t len,bool copy, uint8_t* cop
                 if (millis() - _lastSeen > H4AS_WRITE_TIMEOUT) { // [ ] Comparing to _lastSeen is not correct, probably it wasn't seen before the TX call by a duration of H4AS_WRITE_TIMEOUT.
                     H4AT_PRINT2("Write TIMEOUT: %d\n", millis() - _lastSeen);
                     _shutdown();
-                    if (copy_data) free(copy_data);
-                    copy_data = nullptr;
+                    if (copy_data) {
+                        free(copy_data);
+                        copy_data = nullptr;
+                    }
                     return ERR_TIMEOUT; // Discard the rest of the data.
                 }
 #if H4AS_QUQUE_ON_CANNOT_WRITE
@@ -815,7 +817,7 @@ err_t H4AsyncClient::__TX(const uint8_t* data,size_t len,bool copy, uint8_t* cop
     } else {
         H4AT_PRINT1("%p __TX called during close!\n", this);
         _notify(0,H4AT_CLOSING);
-    }    
+    }
     if (copy_data) free(copy_data);
     return ERR_OK;
 }
