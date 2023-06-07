@@ -191,14 +191,14 @@ err_t _tcp_connect_api(struct tcpip_api_call_data *api_call_params){
         err = c->__connect();
     return err;
 }
-err_t _tcp_nagle_api(struct tcpip_api_call_data *api_call_params){
-    Serial.printf("_tcp_nagle_api\n");
-    tcp_bool_api_call_t * params = (tcp_bool_api_call_t *)api_call_params;
-    auto c= params->c;
-    err_t err = ERR_OK;
-    if (c && c->pcb) err = c->__nagle(params->value);
-    return err;
-}
+// err_t _tcp_nagle_api(struct tcpip_api_call_data *api_call_params){
+//     Serial.printf("_tcp_nagle_api\n");
+//     tcp_bool_api_call_t * params = (tcp_bool_api_call_t *)api_call_params;
+//     auto c= params->c;
+//     err_t err = ERR_OK;
+//     if (c && c->pcb) err = c->__nagle(params->value);
+//     return err;
+// }
 err_t _tcp_shutdown_api(struct tcpip_api_call_data *api_call_params){
     tcp_void_api_call_t * params = (tcp_void_api_call_t *)api_call_params;
     auto c= params->c;
@@ -541,6 +541,45 @@ void H4AsyncClient::_clearDanglingInput() {
 err_t H4AsyncClient::__connect(){
 #if LWIP_ALTCP
     static altcp_allocator_t allocator {altcp_tcp_alloc, nullptr};
+#if H4AT_TLS
+    H4AT_PRINT1("__connect()\tsecure=%d\ttls_mode=%d\n", _URL.secure, _tls_mode);
+    if (_URL.secure && _tls_mode != H4AT_TLS_NONE){
+        // secure.
+        struct altcp_tls_config * conf = nullptr;
+        auto &ca_cert = _keys[H4AT_TLS_CA_CERTIFICATE];
+        switch (_tls_mode){
+            case H4AT_TLS_ONE_WAY:
+                // if (ca_cert && ca_cert->data) // [ ] Shouldn't be needed.
+                conf = altcp_tls_create_config_client(ca_cert->data, ca_cert->len);
+                break;
+
+            case H4AT_TLS_TWO_WAY:
+            {
+                auto &privkey = _keys[H4AT_TLS_PRIVATE_KEY];
+                auto &privkey_pass = _keys[H4AT_TLS_PRIVAKE_KEY_PASSPHRASE];
+                auto &client_cert = _keys[H4AT_TLS_CERTIFICATE];
+
+                conf = altcp_tls_create_config_client_2wayauth(ca_cert->data, ca_cert->len,
+                                                               privkey->data, privkey->len,
+                                                               privkey_pass ? privkey_pass->data : NULL, privkey_pass ? privkey_pass->len : 0,
+                                                               client_cert->data, client_cert->len);
+            }
+                break;
+            default:
+            H4AT_PRINT1("WRONG _tls_mode!\n");
+            return ERR_VAL;
+        }
+        if (conf)
+            allocator = altcp_allocator_t {altcp_tls_alloc, conf};
+        else
+        {
+            H4AT_PRINT1("INVALID TLS CONFIGURATION\n");
+            _notify(0,H4AT_BAD_TLS_CONFIG);
+        }
+    } else {
+        allocator = altcp_allocator_t {altcp_tcp_alloc, nullptr};
+    }
+#endif
 #endif
     if(!pcb) pcb=altcp_new(&allocator);
     altcp_arg(this->pcb, this);
@@ -710,6 +749,8 @@ void H4AsyncClient::nagle(bool enable){
 // #if NO_SYS
 //     __nagle(enable);
 // #else
+//     __nagle(enable);
+//     return;
 //     if (strcmp(H4AS_RTOS_GET_THREAD_NAME, TCPIP_THREAD_NAME)==0) {
 //         __nagle(enable);
 //     } else {
@@ -812,3 +853,22 @@ err_t H4AsyncClient::__TX(const uint8_t* data,size_t len,bool copy, uint8_t* cop
     if (copy_data) free(copy_data);
     return ERR_OK;
 }
+
+#if H4AT_TLS
+void H4AsyncClient::secureTLS(const u8_t * ca, size_t ca_len, const u8_t * privkey, size_t privkey_len, const u8_t * privkey_pass, size_t privkey_pass_len, const u8_t * cert, size_t cert_len)
+{
+    if (!ca || ca_len==0) return;
+
+    _keys[H4AT_TLS_CA_CERTIFICATE] = new mbx{const_cast<u8_t*>(ca), ca_len};
+
+    _tls_mode = H4AT_TLS_ONE_WAY;
+    if (!privkey || privkey_len == 0 || !cert || cert_len == 0) return;
+
+    _keys[H4AT_TLS_PRIVATE_KEY] = new mbx{const_cast<u8_t*>(privkey), privkey_len};
+    if (privkey_pass && privkey_pass_len)
+        _keys[H4AT_TLS_PRIVAKE_KEY_PASSPHRASE] = new mbx{const_cast<u8_t*>(privkey_pass), privkey_pass_len};
+    _keys[H4AT_TLS_CERTIFICATE] = new mbx{const_cast<u8_t*>(cert), cert_len};
+
+    _tls_mode = H4AT_TLS_TWO_WAY;
+}
+#endif

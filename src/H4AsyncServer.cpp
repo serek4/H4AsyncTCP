@@ -25,6 +25,7 @@ SOFTWARE.
 #include<H4AsyncTCP.h>
 #include "lwip/altcp.h"
 #include "lwip/altcp_tcp.h"
+#include "lwip/altcp_tls.h"
 
 #ifdef ARDUINO_ARCH_ESP32
     #include "lwip/priv/tcpip_priv.h"
@@ -85,7 +86,32 @@ void H4AsyncServer::begin(){
 //    h4.every(1000,[]{ heap_caps_check_integrity_all(true); });
     H4AT_PRINT1("SERVER %p listening on port %d\n",this,_port);
 #if LWIP_ALTCP
-    static altcp_allocator_t allocator {altcp_tcp_alloc, conf};
+    static altcp_allocator_t allocator;
+#if H4AT_TLS
+    H4AT_PRINT1("_secure=%d\n", _secure);
+    struct altcp_tls_config * conf = nullptr;
+    if (_secure){
+        H4AT_PRINT1("Setting up secured server\n");
+        auto &privkey = _keys[H4AT_TLS_PRIVATE_KEY];
+        auto &privkey_pass = _keys[H4AT_TLS_PRIVAKE_KEY_PASSPHRASE];
+        auto &cert = _keys[H4AT_TLS_CERTIFICATE];
+
+        conf = altcp_tls_create_config_server_privkey_cert(privkey->data, privkey->len,
+                                                            privkey_pass? privkey_pass->data : NULL, privkey_pass ? privkey_pass->len : 0,
+                                                            cert->data, cert->len);
+        if (conf)
+            allocator = altcp_allocator_t {altcp_tls_alloc, conf};
+        else
+        {
+            H4AT_PRINT1("INVALID TLS CONFIGURATION\n");
+            if (_srvError) _srvError(0,H4AT_BAD_TLS_CONFIG);
+        }
+    }
+    else {
+        H4AT_PRINT1("Setting up unsecured server\n");
+        allocator = altcp_allocator_t {altcp_tcp_alloc, conf};
+    }
+#endif
 #endif
     auto _raw_pcb = altcp_new(&allocator);
     if (_raw_pcb != NULL) {
@@ -95,6 +121,22 @@ void H4AsyncServer::begin(){
         if (err == ERR_OK) {
             _raw_pcb = altcp_listen(_raw_pcb);
             altcp_accept(_raw_pcb, _raw_accept);
-        } //else Serial.printf("RAW CANT BIND\n");
-    } // else Serial.printf("RAW CANT GET NEW PCB\n");
+        } else Serial.printf("RAW CANT BIND\n");
+    }  else Serial.printf("RAW CANT GET NEW PCB\n");
 }
+
+#if H4AT_TLS
+void H4AsyncServer::secureTLS(const u8_t *privkey, size_t privkey_len,
+                              const u8_t *privkey_pass, size_t privkey_pass_len,
+                              const u8_t *cert, size_t cert_len)
+{
+    if (!privkey || !cert || !privkey_len || !cert_len) return;
+    _keys[H4AT_TLS_PRIVATE_KEY] = new mbx{const_cast<u8_t*>(privkey), privkey_len};
+    if (privkey_pass && privkey_pass_len)
+        _keys[H4AT_TLS_PRIVAKE_KEY_PASSPHRASE] = new mbx{const_cast<u8_t*>(privkey_pass), privkey_pass_len};
+    _keys[H4AT_TLS_CERTIFICATE] = new mbx{const_cast<u8_t*>(cert), cert_len};
+
+    _secure = true;
+
+}
+#endif

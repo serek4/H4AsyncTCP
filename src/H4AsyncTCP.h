@@ -55,6 +55,14 @@ extern "C"{
 #include<queue>
 #include<unordered_set>
 
+#if H4AT_TLS
+enum {
+    H4AT_TLS_PRIVATE_KEY,
+    H4AT_TLS_PRIVAKE_KEY_PASSPHRASE,
+    H4AT_TLS_CERTIFICATE,
+    H4AT_TLS_CA_CERTIFICATE
+};
+#endif
 enum {
     H4AT_ERR_DNS_FAIL,
     H4AT_ERR_DNS_NF,
@@ -64,7 +72,10 @@ enum {
     H4AT_INPUT_TOO_BIG,
     H4AT_CLOSING,
     H4AT_OUTPUT_TOO_BIG,
-    H4AT_MAX_ERROR
+    H4AT_MAX_ERROR,
+#if H4AT_TLS
+    H4AT_BAD_TLS_CONFIG
+#endif
 };
 #if H4AT_DEBUG
     #define H4AT_PRINTF(...) Serial.printf(__VA_ARGS__)
@@ -129,6 +140,14 @@ class H4AsyncClient {
         friend  err_t               _assignServer(struct tcpip_api_call_data *api_call_params);
 #endif
 
+#if H4AT_TLS
+                std::array<mbx*,4>  _keys {nullptr,nullptr,nullptr,nullptr};
+                enum {
+                    H4AT_TLS_NONE,
+                    H4AT_TLS_ONE_WAY,
+                    H4AT_TLS_TWO_WAY
+                } _tls_mode = H4AT_TLS_NONE;
+#endif
     protected:
                 H4AT_FN_RXDATA      _rxfn=[](const uint8_t* data,size_t len){ Serial.printf("RXFN SAFETY\n"); dumphex(data,len); };
     public:
@@ -190,7 +209,13 @@ class H4AsyncClient {
                 size_t              _stored=0;
 
         H4AsyncClient(altcp_pcb* p=0);
-        virtual ~H4AsyncClient(){ H4AT_PRINT2("H4AsyncClient DTOR %p pcb=%p _bpp=%p\n", this, pcb, _bpp); }
+        virtual ~H4AsyncClient(){
+                                    H4AT_PRINT2("H4AsyncClient DTOR %p pcb=%p _bpp=%p\n", this, pcb, _bpp); 
+#if H4AT_TLS
+                                    for (auto& key : _keys)
+                                        if (key && key->data) key->clear();
+#endif
+                                }
                 void                close(){ _shutdown(); }
                 void                connect(const std::string& host,uint16_t port);
                 void                connect(IPAddress ip,uint16_t port);
