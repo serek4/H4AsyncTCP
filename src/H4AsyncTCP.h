@@ -100,7 +100,11 @@ enum {
 #endif
 
 // struct tcp_pcb;
+#if LWIP_ALTCP
 struct altcp_pcb;
+#else
+#include "lwip/altcp.h"
+#endif
 
 class H4AsyncClient;
 
@@ -112,6 +116,7 @@ class H4AsyncClient {
                 err_t               __TX(const uint8_t* data,size_t len,bool copy=true, uint8_t* copied_data=nullptr);
                 err_t               __shutdown();
                 err_t               __connect();
+                // err_t               __nagle(bool enable);
         static  void                __assignServer(H4AsyncClient* client, altcp_pcb* pcb);
         static  void                __scavenge();
         static  bool                _scavenging;
@@ -120,6 +125,7 @@ class H4AsyncClient {
         friend  err_t               _tcp_tx_api(struct tcpip_api_call_data *api_call_params);
         friend  err_t               _tcp_connect_api(struct tcpip_api_call_data *api_call_params);
         friend  err_t               _tcp_shutdown_api(struct tcpip_api_call_data *api_call_params);
+        // friend  err_t               _tcp_nagle_api(struct tcpip_api_call_data *api_call_params);
         friend  err_t               _assignServer(struct tcpip_api_call_data *api_call_params);
 #endif
 
@@ -138,20 +144,22 @@ class H4AsyncClient {
             if (cxt > 0) active++;
             else if (cxt < 0) active--;
 
-            if (!forceprint && count++ % 20) return;
             int total_active = 0;
             for(auto& c:openConnections) total_active += c->pcb != nullptr;
             for(auto& c:unconnectedClients) total_active += c->pcb != nullptr;
             if (active != total_active) {
                 H4AT_PRINT1("ERROR: active=%d total_active=%d\n", active, total_active);
             }
+            if (!forceprint && count++ % 20) return;
 #if H4AT_DEBUG > 1
             H4AT_PRINTF("%s PCBs:\t",context.c_str());
             // H4AT_PRINTF("openConnections: %d\ttotal_active: %d\n",openConnections.size(), total_active);
             for (auto &c : openConnections)
-                if (c->pcb) {
+                if (c->pcb)
                     H4AT_PRINTF("%p\t", c->pcb);
-                }
+            for (auto &uc : unconnectedClients)
+                if (uc->pcb)
+                    H4AT_PRINTF("[UC %p]\t", uc->pcb);
             H4AT_PRINTF("\n");
 #endif
         }
@@ -210,6 +218,11 @@ class H4AsyncClient {
                 uint16_t            remotePort();
                 void                TX(const uint8_t* d,size_t len,bool copy=true, uint8_t* copied_data=nullptr); // Don't provide copied_data - it's for internal use only
 
+#if H4AT_TLS
+                void                secureTLS(const u8_t *ca, size_t ca_len, const u8_t *privkey = nullptr, size_t privkey_len=0,
+                                            const u8_t *privkey_pass = nullptr, size_t privkey_pass_len = 0,
+                                            const u8_t *cert = nullptr, size_t cert_len = 0);
+#endif
 // syscalls - just don't...
                 uint8_t*            _addFragment(const uint8_t* data,u16_t len);
                 void                _clearDanglingInput();
@@ -222,18 +235,49 @@ class H4AsyncClient {
 };
 
 class H4AsyncServer {
+        static    bool              _bakov;
     protected:
             uint16_t                _port;
+            bool                    _secure;
+#if H4AT_TLS
+            std::array<mbx*,3>       _keys {nullptr,nullptr,nullptr};
+
+#endif
     public:
-            size_t                _heap_alloc=0;
+            size_t                _heap_alloc=0; // Single Server Accept heap usage.
             H4AT_FN_ERROR        _srvError;
         H4AsyncServer(uint16_t port): _port(port){}
         virtual ~H4AsyncServer(){}
+#if H4AT_TLS
+                void        secureTLS(const u8_t *privkey, size_t privkey_len,
+                                const u8_t *privkey_pass, size_t privkey_pass_len,
+                                const u8_t *cert, size_t cert_len);
+#endif
 
         virtual void        begin();
                 void        onError(H4AT_FN_ERROR f){ _srvError=f; }
-        virtual void        reset(){}
+        virtual void        reset(){
+#if H4AT_TLS
+            for (auto& key : _keys){
+                if (key && key->data)
+                    key->clear();
+            }
+            _secure = false;
+#endif
+        }
         virtual void        route(void* c,const uint8_t* data,size_t len)=0;
 
         virtual H4AsyncClient* _instantiateRequest(struct altcp_pcb *p);
+        static  bool            checkMemory (const H4AsyncServer& srv) {
+                                            auto fh=_HAL_freeHeap();
+                                            auto _heapLO = H4AT_HEAP_THROTTLE_LO + srv._heap_alloc;
+                                            auto _heapHI = H4AT_HEAP_THROTTLE_HI + srv._heap_alloc;
+                                            H4AT_PRINT3("FREE HEAP %u LOW %u HIGH %u BKV %d\n",fh,_heapLO,_heapHI,_bakov);
+                                            if (fh < _heapLO || (_bakov && (fh < _heapHI))){
+                                                _bakov = true;
+                                                return false;
+                                            }
+                                            _bakov = false;
+                                            return true;
+                                        };
 };
