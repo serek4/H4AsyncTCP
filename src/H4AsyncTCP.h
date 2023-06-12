@@ -35,9 +35,8 @@ For example, other rights such as publicity, privacy, or moral rights may limit 
 #include<Arduino.h>
 
 #define LWIP_INTERNAL
-extern "C"{
-  #include "lwip/err.h"
-}
+#include "lwip/err.h"
+#include "lwip/tcpbase.h"
 
 #ifdef ARDUINO_ARCH_ESP8266
     #include<ESP8266WiFi.h>
@@ -71,11 +70,13 @@ enum {
     H4AT_HEAP_LIMITER_LOST,
     H4AT_INPUT_TOO_BIG,
     H4AT_CLOSING,
+    H4AT_UNCONNECTED,
     H4AT_OUTPUT_TOO_BIG,
-    H4AT_MAX_ERROR,
 #if H4AT_TLS
-    H4AT_BAD_TLS_CONFIG
+    H4AT_BAD_TLS_CONFIG,
+    H4AT_WRONG_TLS_MODE,
 #endif
+    H4AT_MAX_ERROR
 };
 #if H4AT_DEBUG
     #define H4AT_PRINTF(...) Serial.printf(__VA_ARGS__)
@@ -116,29 +117,22 @@ struct altcp_pcb;
 #else
 #include "lwip/altcp.h"
 #endif
+// enum tcp_state;
+enum tcp_state getTCPState(struct altcp_pcb *conn);
 
 class H4AsyncClient;
 
 using H4AT_NVP_MAP      =std::unordered_map<std::string,std::string>;
 using H4AT_FN_ERROR     =std::function<bool(int,int)>;
 using H4AT_FN_RXDATA    =std::function<void(const uint8_t* data, size_t len)>;
-
 class H4AsyncClient {
-                err_t               __TX(const uint8_t* data,size_t len,bool copy=true, uint8_t* copied_data=nullptr);
-                err_t               __shutdown();
-                err_t               __connect();
-                // err_t               __nagle(bool enable);
-        static  void                __assignServer(H4AsyncClient* client, altcp_pcb* pcb);
         static  void                __scavenge();
         static  bool                _scavenging;
                 void                _parseURL(const std::string& url);
-#if NO_SYS == 0
-        friend  err_t               _tcp_tx_api(struct tcpip_api_call_data *api_call_params);
-        friend  err_t               _tcp_connect_api(struct tcpip_api_call_data *api_call_params);
-        friend  err_t               _tcp_shutdown_api(struct tcpip_api_call_data *api_call_params);
-        // friend  err_t               _tcp_nagle_api(struct tcpip_api_call_data *api_call_params);
-        friend  err_t               _assignServer(struct tcpip_api_call_data *api_call_params);
-#endif
+                bool                __willClose=false;
+                void                _willClose() {__willClose = true;}
+        friend  err_t   _raw_recv(void *arg, struct altcp_pcb *tpcb, struct pbuf *p, err_t err);
+        friend  err_t   _raw_accept(void *arg, struct altcp_pcb *p, err_t err);
 
 #if H4AT_TLS
                 std::array<mbx*,4>  _keys {nullptr,nullptr,nullptr,nullptr};
@@ -155,33 +149,8 @@ class H4AsyncClient {
         static  std::unordered_set<H4AsyncClient*> unconnectedClients;
 
                 void                printState(std::string context);
-        static  void                __retryClose(H4AsyncClient* c,altcp_pcb* pcb);
         static  void                retryClose(H4AsyncClient* c,altcp_pcb* pcb);
-        static  void                checkPCBs(std::string context, int cxt = 0, bool forceprint=false){
-            static int count = 0;
-            static int active = 0;
-            if (cxt > 0) active++;
-            else if (cxt < 0) active--;
-
-            int total_active = 0;
-            for(auto& c:openConnections) total_active += c->pcb != nullptr;
-            for(auto& c:unconnectedClients) total_active += c->pcb != nullptr;
-            if (active != total_active) {
-                H4AT_PRINT1("ERROR: active=%d total_active=%d\n", active, total_active);
-            }
-            if (!forceprint && count++ % 20) return;
-#if H4AT_DEBUG > 1
-            H4AT_PRINTF("%s PCBs:\t",context.c_str());
-            // H4AT_PRINTF("openConnections: %d\ttotal_active: %d\n",openConnections.size(), total_active);
-            for (auto &c : openConnections)
-                if (c->pcb)
-                    H4AT_PRINTF("%p\t", c->pcb);
-            for (auto &uc : unconnectedClients)
-                if (uc->pcb)
-                    H4AT_PRINTF("[UC %p]\t", uc->pcb);
-            H4AT_PRINTF("\n");
-#endif
-        }
+        static  void                checkPCBs(std::string context, int cxt = 0, bool forceprint=false);
                 struct  URL {
                     std::string     scheme;
                     std::string     host;
@@ -247,6 +216,12 @@ class H4AsyncClient {
                 void                secureTLS(const u8_t *ca, size_t ca_len, const u8_t *privkey = nullptr, size_t privkey_len=0,
                                             const u8_t *privkey_pass = nullptr, size_t privkey_pass_len = 0,
                                             const u8_t *cert = nullptr, size_t cert_len = 0);
+
+#endif
+#if H4AT_TLS_CHECKER
+        static  bool                isCertValid(const u8_t *cert = nullptr, size_t cert_len = 0);
+        static  bool                isPrivKeyValid(const u8_t *privkey = nullptr, size_t privkey_len=0,
+                                                    const u8_t *privkey_pass = nullptr, size_t privkey_pass_len = 0);
 #endif
 // syscalls - just don't...
                 uint8_t*            _addFragment(const uint8_t* data,u16_t len);
@@ -305,4 +280,13 @@ class H4AsyncServer {
                                             _bakov = false;
                                             return true;
                                         };
+};
+
+class LwIPCoreLocker {
+    static volatile int _locks;
+    bool _locked=false;
+public:    
+    LwIPCoreLocker();
+    void unlock();
+    ~LwIPCoreLocker();
 };

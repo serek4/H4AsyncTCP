@@ -39,8 +39,12 @@ For example, other rights such as publicity, privacy, or moral rights may limit 
 #include "lwip/altcp_tls.h"
 #include "lwip/dns.h"
 
-#ifdef ARDUINO_ARCH_ESP32
-    #include "lwip/priv/tcpip_priv.h"
+// #ifdef ARDUINO_ARCH_ESP32
+// #include "lwip/priv/tcpip_priv.h"
+// #endif
+#if H4AT_TLS_CHECKER
+#include "mbedtls/x509_crt.h"
+#include "mbedtls/pk.h"
 #endif
 
 #if LWIP_ALTCP == 0
@@ -122,16 +126,16 @@ static const char * const tcp_state_str[] = {
 };
 #endif
 
-static enum tcp_state getTCPState(struct altcp_pcb *conn) {
+enum tcp_state getTCPState(struct altcp_pcb *conn) {
 #if LWIP_ALTCP
+    LwIPCoreLocker lock;
     if (conn) {
         struct tcp_pcb *pcb = (struct tcp_pcb *)conn->state;
         if (conn->inner_conn) return (tcp_state)-1;
         if (pcb)
-        {
             return pcb->state;
-        }
     }
+    H4AT_PRINT1("GETSTATE %p NO CONN\n", conn);
     return CLOSED;
 
     //* For TLS, this is the code:
@@ -147,167 +151,14 @@ static enum tcp_state getTCPState(struct altcp_pcb *conn) {
     return conn->state;
 #endif
 }
-typedef struct {
-    H4AsyncClient* c;
-    struct altcp_pcb* pcb;
-    const uint8_t* data;
-    size_t size;
-    uint8_t apiflags;
-} tcp_api_call_t;
 
-#if NO_SYS == 0
-typedef struct {
-    H4AsyncClient* c;
-    const uint8_t* data;
-    size_t size;
-    bool copy;
-} tcp_tx_api_call_t;
-typedef struct {
-    H4AsyncClient* c;
-    bool value;
-} tcp_bool_api_call_t;
-typedef struct {
-    H4AsyncClient* c;
-} tcp_void_api_call_t;
-typedef struct {
-    H4AsyncClient* c;
-    altcp_pcb* pcb;
-} tcp_pcb_api_call_t;
 
-err_t _tcp_tx_api(struct tcpip_api_call_data *api_call_params){
-    H4AT_PRINT2("_tcp_tx_api\n");
-    auto params = (tcp_tx_api_call_t *)api_call_params;
-    auto c=params->c;
-    err_t err = ERR_ARG;
-    if (c && c->pcb) err=c->__TX(params->data,params->size,params->copy); // else discards...
-    return err;
-}
-err_t _tcp_connect_api(struct tcpip_api_call_data *api_call_params){
-    H4AT_PRINT2("_tcp_connect_api\n");
-    auto params = (tcp_void_api_call_t*)api_call_params;
-    auto c=params->c;
-    err_t err = ERR_ARG;
-    if (c)
-        err = c->__connect();
-    return err;
-}
-// err_t _tcp_nagle_api(struct tcpip_api_call_data *api_call_params){
-//     Serial.printf("_tcp_nagle_api\n");
-//     tcp_bool_api_call_t * params = (tcp_bool_api_call_t *)api_call_params;
-//     auto c= params->c;
-//     err_t err = ERR_OK;
-//     if (c && c->pcb) err = c->__nagle(params->value);
-//     return err;
-// }
-err_t _tcp_shutdown_api(struct tcpip_api_call_data *api_call_params){
-    tcp_void_api_call_t * params = (tcp_void_api_call_t *)api_call_params;
-    auto c= params->c;
-    H4AT_PRINT2("_tcp_shutdown_api c=%p\n",c);
-    if (c/* && c->pcb ?? */) c->__shutdown();
-    return ERR_OK;
-}
-err_t _tcp_retryclose_api(struct tcpip_api_call_data *api_call_params){
-    tcp_pcb_api_call_t * params = (tcp_pcb_api_call_t *)api_call_params;
-    auto  c = params->c;
-    auto pcb = params->pcb;
-    if (c && pcb)
-        H4AsyncClient::__retryClose(params->c,params->pcb);
-    return ERR_OK;
-}
-err_t _raw_sent(void* arg,struct altcp_pcb *tpcb, u16_t len);
-err_t _raw_recv(void *arg, struct altcp_pcb *tpcb, struct pbuf *p, err_t err);
-void _raw_error(void *arg, err_t err);
-
-err_t _assignServer(struct tcpip_api_call_data* p){
-    tcp_pcb_api_call_t* params = (tcp_pcb_api_call_t*)p;
-    auto c = params->c;
-    auto pcb = params->pcb;
-    H4AsyncClient::__assignServer(c,pcb);
-    return ERR_OK;
-}
-
-void H4AsyncClient::retryClose(H4AsyncClient* c,altcp_pcb *pcb)
-{
-    if (strcmp(H4AS_RTOS_GET_THREAD_NAME, TCPIP_THREAD_NAME) == 0){
-        __retryClose(c,pcb);
-    }
-    else {
-        tcp_pcb_api_call_t call_data {c,pcb};
-        tcpip_api_call(_tcp_retryclose_api, (tcpip_api_call_data*)&call_data);
-    }
-    // Check the state of the connection
-}
-
-void H4AsyncClient::_shutdown(){
-    H4AT_PRINT1("_shutdown %p %s\n",this, pcTaskGetName(NULL));
-    if (!pcb || (strcmp(H4AS_RTOS_GET_THREAD_NAME, TCPIP_THREAD_NAME)==0)) {// No need to sync with tcpip_thread, all is internal management.|| Or we're in the tcpip_thread
-        __shutdown();
-        return;
-    }
-    tcp_void_api_call_t call_data {this};
-    tcpip_api_call(_tcp_shutdown_api, (tcpip_api_call_data*)&call_data);
-}
-
-void H4AsyncClient::_connect() {
-    H4AT_PRINT2("_connect p=%p state=%d\n",pcb, pcb ? getTCPState(pcb) : -1);
-    err_t err = ERR_OK;
-    if (strcmp(H4AS_RTOS_GET_THREAD_NAME, TCPIP_THREAD_NAME)==0) {
-        // if(!pcb) pcb=tcp_new();
-        err = __connect();
-    }
-    else {
-        tcp_void_api_call_t params{this};
-        tcpip_api_call(_tcp_connect_api, (struct tcpip_api_call_data*)&params);
-    }
-    _notify(err);
-}
-
-void H4AsyncClient::TX(const uint8_t* data,size_t len,bool copy, uint8_t* copy_data){ 
-    H4AT_PRINT1("TX pcb=%p data=%p len=%d copy=%d max=%d\n",pcb,data,len,copy, maxPacket());
-    if (_closing) {
-        _notify(0, H4AT_CLOSING);
-        return;
-    }
-    if (strcmp(H4AS_RTOS_GET_THREAD_NAME, TCPIP_THREAD_NAME)==0) {
-        __TX(data,len,copy,copy_data);
-        return;
-    }
-    tcp_tx_api_call_t call_data{this,data,len,copy};
-
-    auto err = tcpip_api_call(_tcp_tx_api,(struct tcpip_api_call_data*)&call_data);
-    if (err) H4AT_PRINT1("ERR %d \"%s\"\n",err, errorstring(err).c_str());
-}
-
-#else
-
-void H4AsyncClient::retryClose(H4AsyncClient* c,altcp_pcb *pcb)
-{
-    __retryClose(c,pcb);
-    // Check the state of the connection
-}
-
-void H4AsyncClient::_shutdown(){
-    H4AT_PRINT1("_shutdown %p\n",this);
-    __shutdown();
-}
-
-void H4AsyncClient::_connect() {
-    H4AT_PRINT2("_connect p=%p state=%d\n",pcb, pcb ? getTCPState(pcb) : -1);
-    if(!pcb) pcb=tcp_new();
-    _notify(__connect());
-}
-
-void H4AsyncClient::TX(const uint8_t* data,size_t len,bool copy, uint8_t* copy_data){ 
-    H4AT_PRINT1("TX pcb=%p data=%p len=%d copy=%d max=%d\n",pcb,data,len,copy, maxPacket());
-    __TX(data,len,copy);
-}
-#endif
 void H4AsyncClient::printState(std::string context){
     auto state = getTCPState(pcb);
     H4AT_PRINT2("%s\tpcb=%p s=%d \"%s\"\n", context.c_str(), pcb, state, (state >= CLOSED && state <=TIME_WAIT)? tcp_state_str[state]:"???");
 }
 
-void H4AsyncClient::__retryClose(H4AsyncClient* c,altcp_pcb *pcb)
+void H4AsyncClient::retryClose(H4AsyncClient* c,altcp_pcb *pcb)
 {
     auto state = getTCPState(pcb);
     Serial.printf("retryClose %p state=%d\n", pcb, state);
@@ -331,6 +182,7 @@ void H4AsyncClient::__retryClose(H4AsyncClient* c,altcp_pcb *pcb)
         Serial.printf("Already freed/closed\n", pcb);
         return;
     }
+    LwIPCoreLocker lock;
     err_t err = altcp_close(pcb);
     if (err != ERR_OK){
         Serial.printf("failed with %d\n", pcb, err);
@@ -344,31 +196,65 @@ void H4AsyncClient::__retryClose(H4AsyncClient* c,altcp_pcb *pcb)
     }
 }
 
+void H4AsyncClient::checkPCBs(std::string context, int cxt, bool forceprint) {
+    static int count = 0;
+    static int active = 0;
+    if (cxt > 0) active++;
+    else if (cxt < 0) active--;
+
+    int total_active = 0;
+    for(auto& c:openConnections) total_active += c->pcb != nullptr;
+    for(auto& c:unconnectedClients) total_active += c->pcb != nullptr;
+    if (active != total_active) {
+        H4AT_PRINT1("ERROR: active=%d total_active=%d\n", active, total_active);
+    }
+    if (!forceprint && count++ % 20) return;
+#if H4AT_DEBUG > 1
+    H4AT_PRINTF("%s PCBs:\t",context.c_str());
+    // H4AT_PRINTF("openConnections: %d\ttotal_active: %d\n",openConnections.size(), total_active);
+    for (auto &c : openConnections)
+        if (c->pcb)
+            H4AT_PRINTF("%p\t", c->pcb);
+    for (auto &uc : unconnectedClients)
+        if (uc->pcb)
+            H4AT_PRINTF("[UC %p]\t", uc->pcb);
+    H4AT_PRINTF("\n");
+#endif
+        
+}
+
 void H4AsyncClient::_notify(int e,int i) { 
     if(e) if (_cbError(e,i) || !pcb) _shutdown();
 }
 
-err_t H4AsyncClient::__shutdown() {
-    H4AT_PRINT1("__shutdown %p %d\n",this, _closing);
+void H4AsyncClient::_shutdown() {
+    H4AT_PRINT1("_shutdown %p %d\n",this, _closing);
     if (_closing) {
         H4AT_PRINT1("Already closing/closed\n");
-        return ERR_OK;
+        return;
     }
+    LwIPCoreLocker lock;
     _closing=true;
     _lastSeen=0;
     err_t err = ERR_OK;
     if(pcb){
+        heap_caps_check_integrity_all(true);
+
         auto state = getTCPState(pcb);
+        
         H4AT_PRINT1("RAW 1 PCB=%p STATE=%d \"%s\"\n",pcb,state,(state >= CLOSED && state <=TIME_WAIT)? tcp_state_str[state]:"???");
-        H4AT_PRINT1("RAW 2 clean STATE=%d\n",state);
-        altcp_arg(pcb, NULL);
-        //***************************************************
-        altcp_sent(pcb, NULL);
-        altcp_recv(pcb, NULL);
-        altcp_err(pcb, NULL);
-        H4AT_PRINT1("*********** pre closing\n");
-        if (state)
-            err=altcp_close(pcb);
+        if (state >= CLOSED) // Valid PCB...
+        {
+            altcp_arg(pcb, NULL);
+            //***************************************************
+            altcp_sent(pcb, NULL);
+            altcp_recv(pcb, NULL);
+            altcp_err(pcb, NULL);
+            heap_caps_check_integrity_all(true);
+            H4AT_PRINT1("*********** pre closing\n");
+            if (state)
+                err=altcp_close(pcb);
+        }
             else H4AT_PRINT1("*********** already closed?\n");
 
         if (err)
@@ -401,7 +287,7 @@ err_t H4AsyncClient::__shutdown() {
             H4AT_PRINT1("NO DISCONNECT HANDLER\n");
         h4.queueFunction([](){ checkPCBs("SHUTDOWN", -1);});
     }
-    else { // The connection (as a client) was never established
+    else if (unconnectedClients.count(this)){ // The connection (as a client) was never established
         if (_cbConnectFail) _cbConnectFail();
         else
             H4AT_PRINT1("NO CONNECT FAIL HANDLER\n");
@@ -413,15 +299,18 @@ err_t H4AsyncClient::__shutdown() {
                          { H4AsyncClient::__scavenge(); });
     }
     _clearDanglingInput(); // [x] Should be cleared at all cases (when pcb==null)
-    return err;
+    heap_caps_check_integrity_all(true);
+    __willClose=false;
+    return _notify(err);
 }
 
 void _raw_error(void *arg, err_t err){
-    h4.queueFunction([arg,err](){
-        auto c=reinterpret_cast<H4AsyncClient*>(arg);
-        H4AT_PRINT1("CONNECTION %p *ERROR* pcb=%p err=%d\n",arg,c->pcb, err);
+    H4AT_PRINT1("_raw_error c=%p e=%d\n",arg,err);
+    auto c=reinterpret_cast<H4AsyncClient*>(arg);
+    c->pcb=NULL;
+    h4.queueFunction([c,err](){
+        H4AT_PRINT1("CONNECTION %p *ERROR* pcb=%p err=%d\n",c,c->pcb, err);
         // if (!err) c->pcb=NULL;  // _shutdown() will be called by _notify() if there's an err and pcb will be set to NULL.. 
-        c->pcb=NULL;
         auto it=H4AsyncClient::openConnections.find(c);
         auto it2=H4AsyncClient::unconnectedClients.find(c);
         if (it != H4AsyncClient::openConnections.end() || it2 != H4AsyncClient::unconnectedClients.end()) // has not been deleted.
@@ -432,33 +321,62 @@ void _raw_error(void *arg, err_t err){
 err_t _raw_recv(void *arg, struct altcp_pcb *tpcb, struct pbuf *p, err_t err){
     H4AT_PRINT1("_raw_recv %p tpcb=%p p=%p err=%d data=%p tot_len=%d\n",arg,tpcb,p, err, p ? p->payload:0,p ? p->tot_len:0);
     auto rq=reinterpret_cast<H4AsyncClient*>(arg);
-    if (p == NULL || rq->_closing || err!=ERR_OK) rq->_notify(ERR_CLSD,err); // * warn ...hanging data when closing?
+    H4AT_PRINT2("_closing=%d _wc=%d\n", rq->_closing, rq->__willClose);
+    if (((p == NULL || err!=ERR_OK) && rq->pcb) || rq->_closing) {
+        H4AT_PRINT1("Calling _willClose()\n");
+        rq->_willClose();
+        h4.queueFunction([=](){ rq->_notify(ERR_CLSD, err); });// * warn ...hanging data when closing?
+    } else if (rq->__willClose) {
+        H4AT_PRINT1("Will close already\n");
+    } else if (!rq->pcb) {
+        H4AT_PRINT1("INVALID RQ->PCB\n");
+    }
+    
+    // [ ] queue it? 
+    // if (p == NULL || rq->_closing || err!=ERR_OK) h4.queueFunction([=](){rq->_notify(ERR_CLSD,err);}); 
+                        // [ ] queue it? Might make a gap where application could TX ..
+                        //      Might leave a mark of (will_close) ...
+                        //  if not, we might process our core within lwip thread, which will create issues...
     // https://lists.nongnu.org/archive/html/lwip-users/2016-01/msg00020.html
     else {
+        if (!heap_caps_check_integrity_all(true)) Serial.printf("===RCV0===");
         auto cpydata=static_cast<uint8_t*>(malloc(p->tot_len));
         if(cpydata){
             pbuf_copy_partial(p,cpydata,p->tot_len,0); // instead of direct memcpy that only considers the first pbuf of the possible pbufs chain.
             auto cpyflags=p->flags;
             auto cpylen=p->tot_len;
-            altcp_recved(tpcb, p->tot_len);
+            if (!heap_caps_check_integrity_all(true)) Serial.printf("===RCV1===");
+            altcp_recved(tpcb, p->tot_len); // [ ] Move down to be called in all cases if (p) ... ?
             H4AT_PRINT2("* p=%p * FREE DATA %p %d 0x%02x bpp=%p\n",p,p->payload,p->tot_len,p->flags,rq->_bpp);
             err=ERR_OK;
+            if (!heap_caps_check_integrity_all(true)) Serial.printf("===RCV2===");
             h4.queueFunction([rq,cpydata,cpylen,cpyflags]{
                 H4AT_PRINT2("_raw_recv %p data=%p L=%d f=0x%02x \n",rq,cpydata,cpylen,cpyflags);
+                if (!rq->connected()) {
+                    H4AT_PRINT2("Prevent processing of closing connection __wc[%d] _clg[%d]\n", rq->__willClose, rq->_closing);
+                    return;
+                }
                 rq->_lastSeen=millis();
                 rq->_handleFragment((const uint8_t*) cpydata,cpylen,cpyflags);
+                if (!heap_caps_check_integrity_all(true)) Serial.printf("===RCV3===");
             },[cpydata]{
                 H4AT_PRINT3("FREEING NON REBUILT @ %p\n",cpydata);
                 free(cpydata);
+                if (!heap_caps_check_integrity_all(true)) Serial.printf("===RCV4===");
             });
+            if (!heap_caps_check_integrity_all(true)) Serial.printf("===RCV5===");
         } 
         else
         {
+            H4AT_PRINT1("No enough memory for malloc at _recv!\n");
             rq->_notify(ERR_MEM, _HAL_freeHeap());
             err = ERR_MEM;
         }
-        pbuf_free(p); // [x] This line fixes a possible memory leak (we must pbuf_free(p) even if !cpydata).
+        // pbuf_free(p); // [x] This line fixes a possible memory leak (we must pbuf_free(p) even if !cpydata).
+        if (!heap_caps_check_integrity_all(true)) Serial.printf("===RCV6===");
     }
+    if (p) pbuf_free(p); // [x] This line fixes a possible memory leak (we must pbuf_free(p) even if closes/closed).
+    if (!heap_caps_check_integrity_all(true)) Serial.printf("===RCV7===");
     return err;
 }
 
@@ -470,23 +388,29 @@ err_t _raw_sent(void* arg,struct altcp_pcb *tpcb, u16_t len){
 }
 
 err_t _tcp_connected(void* arg, altcp_pcb* tpcb, err_t err){
+    H4AT_PRINT1("_tcp_connected %p %p e=%d\n",arg,tpcb,err);
     h4.queueFunction([arg,tpcb,err](){
-        H4AT_PRINT1("_tcp_connected %p %p e=%d\n",arg,tpcb,err);
-        H4AsyncClient::checkPCBs("CONNECTED", 1);
+        H4AT_PRINT1("QF tcp_connected %p %p e=%d\n",arg,tpcb,err);
+        LwIPCoreLocker LOCK;
         auto rq=reinterpret_cast<H4AsyncClient*>(arg);
         auto p=reinterpret_cast<altcp_pcb*>(tpcb);
 #if H4AT_DEBUG
-
+        if (!rq->connected()){
+            H4AT_PRINT2("NOT CONNECTED ANYMORE\n");
+            return;
+        }
         auto ip_ = altcp_get_ip(tpcb,0);
         IPAddress ip(ip_addr_get_ip4_u32(ip_));
         H4AT_PRINT1("C=%p _tcp_connected p=%p e=%d IP=%s:%d\n",rq,tpcb,err,ip.toString().c_str(),altcp_get_port(tpcb,0));
 #endif
         H4AsyncClient::openConnections.insert(rq);
         H4AsyncClient::unconnectedClients.erase(rq);
+        H4AsyncClient::checkPCBs("CONNECTED", 1);
         if(rq->_cbConnect) rq->_cbConnect();
         altcp_recv(p, &_raw_recv);
         // ***************************************************
         altcp_sent(p, &_raw_sent);
+        heap_caps_check_integrity_all(true);
     });
     return ERR_OK;
 }
@@ -496,8 +420,8 @@ void _tcp_dns_found(const char * name, struct ip_addr * ipaddr, void * arg) {
     auto p=reinterpret_cast<H4AsyncClient*>(arg);
     if(ipaddr){
         ip_addr_copy(p->_URL.addr, *ipaddr);
-        p->_connect();
-    } else p->_notify(H4AT_ERR_DNS_NF);
+        p->_connect(); // continue on lwip thread
+    } else p->_notify(H4AT_ERR_DNS_NF); // [ ] might queue on mainloop..
 }
 //
 //
@@ -508,17 +432,12 @@ H4AsyncClient::H4AsyncClient(struct altcp_pcb *newpcb): pcb(newpcb){
     H4AT_PRINT1("H4AC CTOR %p PCB=%p\n",this,pcb);
     if(pcb){ // H4AsyncServer receives the pcb, already connected.
         // A server.
-#if NO_SYS
-        __assignServer(this,pcb);
-#else
-        if (strcmp(H4AS_RTOS_GET_THREAD_NAME, TCPIP_THREAD_NAME)==0) {
-            __assignServer(this,pcb);
-        }
-        else {
-            tcp_pcb_api_call_t params{this,pcb};
-            tcpip_api_call(_assignServer, (struct tcpip_api_call_data*)&params);
-        }
-#endif
+        LwIPCoreLocker lock;
+        altcp_arg(pcb, this);
+        altcp_recv(pcb, &_raw_recv);
+        altcp_err(pcb, &_raw_error);
+        altcp_sent(pcb, &_raw_sent);
+        heap_caps_check_integrity_all(true);
         _lastSeen=millis();
     }
     else
@@ -538,93 +457,10 @@ void H4AsyncClient::_clearDanglingInput() {
     }
 }
 
-err_t H4AsyncClient::__connect(){
-#if LWIP_ALTCP
-    static altcp_allocator_t allocator {altcp_tcp_alloc, nullptr};
-#if H4AT_TLS
-    H4AT_PRINT1("__connect()\tsecure=%d\ttls_mode=%d\n", _URL.secure, _tls_mode);
-    if (_URL.secure && _tls_mode != H4AT_TLS_NONE){
-        // secure.
-        struct altcp_tls_config * conf = nullptr;
-        auto &ca_cert = _keys[H4AT_TLS_CA_CERTIFICATE];
-        switch (_tls_mode){
-            case H4AT_TLS_ONE_WAY:
-                // if (ca_cert && ca_cert->data) // [ ] Shouldn't be needed.
-                conf = altcp_tls_create_config_client(ca_cert->data, ca_cert->len);
-                break;
 
-            case H4AT_TLS_TWO_WAY:
-            {
-                auto &privkey = _keys[H4AT_TLS_PRIVATE_KEY];
-                auto &privkey_pass = _keys[H4AT_TLS_PRIVAKE_KEY_PASSPHRASE];
-                auto &client_cert = _keys[H4AT_TLS_CERTIFICATE];
-
-                conf = altcp_tls_create_config_client_2wayauth(ca_cert->data, ca_cert->len,
-                                                               privkey->data, privkey->len,
-                                                               privkey_pass ? privkey_pass->data : NULL, privkey_pass ? privkey_pass->len : 0,
-                                                               client_cert->data, client_cert->len);
-            }
-                break;
-            default:
-            H4AT_PRINT1("WRONG _tls_mode!\n");
-            return ERR_VAL;
-        }
-        if (conf)
-            allocator = altcp_allocator_t {altcp_tls_alloc, conf};
-        else
-        {
-            H4AT_PRINT1("INVALID TLS CONFIGURATION\n");
-            _notify(0,H4AT_BAD_TLS_CONFIG);
-        }
-    } else {
-        allocator = altcp_allocator_t {altcp_tcp_alloc, nullptr};
-    }
-#endif
-#endif
-    if(!pcb) pcb=altcp_new(&allocator);
-    altcp_arg(this->pcb, this);
-    altcp_err(this->pcb, &_raw_error);
-    return altcp_connect(this->pcb, &_URL.addr, _URL.port,(altcp_connected_fn)&_tcp_connected);
-}
-
-void H4AsyncClient::__assignServer(H4AsyncClient *client, altcp_pcb *pcb)
-{
-    if (!client || !pcb)
-        return;
-    client->pcb = pcb;
-    altcp_arg(pcb, client);
-    altcp_recv(pcb, &_raw_recv);
-    altcp_err(pcb, &_raw_error);
-    altcp_sent(pcb, &_raw_sent);
-}
-
-void H4AsyncClient::__scavenge()
-{
-    H4AT_PRINT1("SCAVENGE CONNECTIONS! oc=%u uc=%u\n", openConnections.size(), unconnectedClients.size());
-    _scavenging = true;
-    std::vector<H4AsyncClient*> tbd;
-    // Nullified PCBs are not really needed to check, as __shutdown() will reset _lastSeen.
-    for(auto &oc:openConnections){
-        H4AT_PRINT1("T=%u OC %p ls=%u age(s)=%u SCAV=%u PCB=%p %s\n",millis(),oc,oc->_lastSeen,(millis() - oc->_lastSeen) / 1000,H4AS_SCAVENGE_FREQ, oc->pcb, oc->_closing? "CLOSING": "");
-        if((millis() - oc->_lastSeen) > H4AS_SCAVENGE_FREQ || oc->_closing) tbd.push_back(oc);
-    }
-    for(auto &uc:unconnectedClients){
-        H4AT_PRINT1("T=%u UC %p ct=%u age(s)=%u SCAV=%u\n",millis(),uc,uc->_creatTime,(millis() - uc->_creatTime) / 1000,H4AS_SCAVENGE_FREQ);
-        if((millis() - uc->_creatTime) > H4AS_SCAVENGE_FREQ) tbd.push_back(uc);
-    }
-    for(auto &rq:tbd) {
-        H4AT_PRINT1("Scavenging %p\n",rq); 
-            rq->_shutdown();
-        if (openConnections.count(rq))
-            openConnections.erase(rq);
-        else
-            unconnectedClients.erase(rq);
-        delete rq;
-    }
-    _scavenging = false;
-}
 
 void  H4AsyncClient::_parseURL(const std::string& url){
+    Serial.printf("_parseULR(%s) find=%d\n", url, url.find("http",0));
     if(url.find("http",0)) _parseURL(std::string("http://")+url);
     else {
         std::vector<std::string> vs=split(url,"//");
@@ -663,13 +499,16 @@ uint8_t* H4AsyncClient::_addFragment(const uint8_t* data,u16_t len){
             _bpp=p;
             memcpy(_bpp+_stored,data,len);
             _stored+=len;
+            if (!heap_caps_check_integrity_all(true)) Serial.printf("===AF0===");
         }
         else {
         //  shouldn't ever happen!
             H4AT_PRINT1("not enough realloc mem\n");
             _clearDanglingInput();
+            if (!heap_caps_check_integrity_all(true)) Serial.printf("===AF1===");
         }
     }
+    if (!heap_caps_check_integrity_all(true)) Serial.printf("===AF2===");
     return p;
 }
 
@@ -697,6 +536,97 @@ void H4AsyncClient::_scavenge(){
         true
     );
 }
+
+void H4AsyncClient::__scavenge()
+{
+    H4AT_PRINT1("SCAVENGE CONNECTIONS! oc=%u uc=%u\n", openConnections.size(), unconnectedClients.size());
+    _scavenging = true;
+    std::vector<H4AsyncClient*> tbd;
+    // Nullified PCBs are not really needed to check, as _shutdown() will reset _lastSeen.
+    for(auto &oc:openConnections){
+        H4AT_PRINT1("T=%u OC %p ls=%u age(s)=%u SCAV=%u PCB=%p %s\n",millis(),oc,oc->_lastSeen,(millis() - oc->_lastSeen) / 1000,H4AS_SCAVENGE_FREQ, oc->pcb, oc->_closing? "CLOSING": "");
+        if((millis() - oc->_lastSeen) > H4AS_SCAVENGE_FREQ || oc->_closing) tbd.push_back(oc);
+    }
+    for(auto &uc:unconnectedClients){
+        H4AT_PRINT1("T=%u UC %p ct=%u age(s)=%u SCAV=%u\n",millis(),uc,uc->_creatTime,(millis() - uc->_creatTime) / 1000,H4AS_SCAVENGE_FREQ);
+        // if((millis() - uc->_creatTime) > H4AS_SCAVENGE_FREQ) tbd.push_back(uc);
+        if((uc->pcb==0 && uc->_closing && !uc->__willClose) || ((millis() - uc->_creatTime) > H4AS_SCAVENGE_FREQ)) tbd.push_back(uc);
+    }
+    for(auto &rq:tbd) {
+        H4AT_PRINT1("Scavenging %p [%s]\n",rq, openConnections.count(rq) ? "OC" : unconnectedClients.count(rq) ? "UC" : "UNKNOWN"); 
+        rq->_shutdown();
+        if (!heap_caps_check_integrity_all(true)) Serial.printf("===SCV2===");
+        if (openConnections.count(rq))
+            openConnections.erase(rq);
+        else
+            unconnectedClients.erase(rq);
+
+        if (!heap_caps_check_integrity_all(true)) Serial.printf("===SCV3===");
+
+        delete rq;
+        if (!heap_caps_check_integrity_all(true)) Serial.printf("===SCV4===");
+    }
+    _scavenging = false;
+}
+
+void H4AsyncClient::_connect() {
+    H4AT_PRINT2("_connect p=%p state=%d\n",pcb, pcb ? getTCPState(pcb) : -1);
+    LwIPCoreLocker lock;
+#if LWIP_ALTCP
+    static altcp_allocator_t allocator {altcp_tcp_alloc, nullptr};
+#if H4AT_TLS
+    H4AT_PRINT1("_URL.secure=%d\ttls_mode=%d\n", _URL.secure, _tls_mode);
+    if (_URL.secure && _tls_mode != H4AT_TLS_NONE){
+        H4AT_PRINT1("Setting the secure config\n");
+        // secure.
+        struct altcp_tls_config * conf = nullptr;
+        auto &ca_cert = _keys[H4AT_TLS_CA_CERTIFICATE];
+        switch (_tls_mode){
+            case H4AT_TLS_ONE_WAY:
+                // if (ca_cert && ca_cert->data) // [ ] Shouldn't be needed.
+                conf = altcp_tls_create_config_client(ca_cert->data, ca_cert->len);
+                H4AT_PRINT2("ONE WAY TLS conf=%p\n", conf);
+                break;
+
+            case H4AT_TLS_TWO_WAY:
+            {
+                auto &privkey = _keys[H4AT_TLS_PRIVATE_KEY];
+                auto &privkey_pass = _keys[H4AT_TLS_PRIVAKE_KEY_PASSPHRASE];
+                auto &client_cert = _keys[H4AT_TLS_CERTIFICATE];
+
+                conf = altcp_tls_create_config_client_2wayauth(ca_cert->data, ca_cert->len,
+                                                               privkey->data, privkey->len,
+                                                               privkey_pass ? privkey_pass->data : NULL, privkey_pass ? privkey_pass->len : 0,
+                                                               client_cert->data, client_cert->len);
+                H4AT_PRINT2("TWO WAY TLS conf=%p\n", conf);
+            }
+                break;
+            default:
+            H4AT_PRINT1("WRONG _tls_mode!\n");
+            _notify(0,H4AT_WRONG_TLS_MODE);
+        }
+        if (conf)
+            allocator = altcp_allocator_t {altcp_tls_alloc, conf};
+        else
+        {
+            H4AT_PRINT1("INVALID TLS CONFIGURATION\n");
+            _notify(0,H4AT_BAD_TLS_CONFIG);
+        }
+    } else {
+        H4AT_PRINT1("SETTING TCP CHANNEL\n");
+        allocator = altcp_allocator_t {altcp_tcp_alloc, nullptr};
+    }
+#endif
+#endif
+    H4AT_PRINT3("tls_alloc=%p alloc=%p allocator.arg %p\n",altcp_tls_alloc, allocator.alloc, allocator.arg);
+    H4AT_PRINT3("pcb=%p\n");
+    if(!pcb) pcb=altcp_new(&allocator);
+    altcp_arg(this->pcb, this);
+    altcp_err(this->pcb, &_raw_error);
+    _notify(altcp_connect(this->pcb, &_URL.addr, _URL.port,(altcp_connected_fn)&_tcp_connected));
+    heap_caps_check_integrity_all(true);
+}
+
 //
 //      PUBLICS
 //
@@ -706,6 +636,7 @@ void H4AsyncClient::connect(const std::string& host,uint16_t port){
     if(ip.fromString(host.data())) connect(ip,port);
     else {
         _URL.port=port;
+        LwIPCoreLocker lock;
         err_t err = dns_gethostbyname(host.data(), &_URL.addr, (dns_found_callback)&_tcp_dns_found, this);
         if(err) _notify(H4AT_ERR_DNS_FAIL,err);
     }
@@ -723,7 +654,7 @@ void H4AsyncClient::connect(IPAddress ip,uint16_t port){
     _connect();
 }
 
-bool H4AsyncClient::connected(){ return pcb && getTCPState(pcb)== 4; }
+bool H4AsyncClient::connected(){ return !__willClose && !_closing && pcb && getTCPState(pcb) == ESTABLISHED; }
 
 std::string H4AsyncClient::errorstring(int e){
     #ifdef H4AT_DEBUG
@@ -734,8 +665,8 @@ std::string H4AsyncClient::errorstring(int e){
     #endif
 }
 
-uint32_t H4AsyncClient::localAddress()
-{ 
+uint32_t H4AsyncClient::localAddress() { 
+    LwIPCoreLocker lock;
     auto ip = altcp_get_ip(pcb,1);
     return ip_addr_get_ip4_u32(ip); 
 }
@@ -746,21 +677,7 @@ uint16_t H4AsyncClient::localPort(){ return altcp_get_port(pcb,1); };
 
 void H4AsyncClient::nagle(bool enable){
 //     Serial.printf("NAGLE %s\n",enable?"ON":"OFF");
-// #if NO_SYS
-//     __nagle(enable);
-// #else
-//     __nagle(enable);
-//     return;
-//     if (strcmp(H4AS_RTOS_GET_THREAD_NAME, TCPIP_THREAD_NAME)==0) {
-//         __nagle(enable);
-//     } else {
-//         tcp_bool_api_call_t call_data{this,enable};
-//         tcpip_api_call(_tcp_nagle_api,(tcpip_api_call_data*)&call_data);
-//     }
-// #endif
-// }
-// err_t H4AsyncClient::__nagle(bool enable){
-    // Serial.printf("__nagle %p %s\n",pcb,enable?"ON":"OFF");
+    LwIPCoreLocker lock;
     if(pcb){
         if(enable) { altcp_nagle_enable(pcb); _nagle=true; }
         else { altcp_nagle_disable(pcb); _nagle=false; }
@@ -768,8 +685,8 @@ void H4AsyncClient::nagle(bool enable){
     } //else Serial.printf("NAGLE PCB NULL\n");
 }
 
-uint32_t H4AsyncClient::remoteAddress()
-{ 
+uint32_t H4AsyncClient::remoteAddress() { 
+    LwIPCoreLocker lock;
     auto ip = altcp_get_ip(pcb,0);
     return ip_addr_get_ip4_u32(ip); 
 }
@@ -777,9 +694,15 @@ IPAddress H4AsyncClient::remoteIP(){ return IPAddress( remoteAddress()); }
 std::string H4AsyncClient::remoteIPstring(){ return std::string(ipaddr_ntoa(altcp_get_ip(pcb,0))); }
 uint16_t H4AsyncClient::remotePort(){ return altcp_get_port(pcb,0);  }
 
-err_t H4AsyncClient::__TX(const uint8_t* data,size_t len,bool copy, uint8_t* copy_data){ 
-    H4AT_PRINT1("__TX pcb=%p data=%p len=%d copy=%d max=%d\n",pcb,data,len,copy, maxPacket());
-    if(connected() && !_closing){
+void H4AsyncClient::TX(const uint8_t* data,size_t len,bool copy, uint8_t* copy_data){ 
+    H4AT_PRINT1("TX pcb=%p data=%p len=%d copy=%d max=%d copy_data=%p\n",pcb,data,len,copy, maxPacket(), copy_data);
+    heap_caps_check_integrity_all(true);
+    LwIPCoreLocker lock;
+    if(!connected()){
+        H4AT_PRINT1("%p TX called %s!\n", this, _closing ? "during close" : __willClose ? "and it will close" : "before connect");
+        _notify(0,(_closing || __willClose)?H4AT_CLOSING:H4AT_UNCONNECTED);
+    }
+    else{
         uint8_t flags;
         size_t  sent=0;
         size_t  left=len;
@@ -803,14 +726,15 @@ err_t H4AsyncClient::__TX(const uint8_t* data,size_t len,bool copy, uint8_t* cop
                     H4AT_PRINT1("ERR %d after write H=%u sb=%d Q=%d\n", err, _HAL_freeHeap(), altcp_sndbuf(pcb), altcp_sndqueuelen(pcb));
                     _notify(err,44);
                     if (copy_data) free(copy_data);
-                    return err; // [x] copy_data is not freed (Better manage it..)
+                    return; // [x] copy_data is not freed (Better manage it..)
                 }
                 else {
                     sent+=chunk;
                     left-=chunk;
                 }
+                heap_caps_check_integrity_all(true);
             }
-            else if (!_closing){
+            else{
                 H4AT_PRINT1("Cannot write: available=%d QL=%d p=%p\n",available,qlen, pcb);
                 _HAL_feedWatchdog();
                 yield();
@@ -822,7 +746,8 @@ err_t H4AsyncClient::__TX(const uint8_t* data,size_t len,bool copy, uint8_t* cop
                         free(copy_data);
                         copy_data = nullptr;
                     }
-                    return ERR_TIMEOUT; // Discard the rest of the data.
+                    heap_caps_check_integrity_all(true);
+                    return; // ** Discards the rest of the data.
                 }
 #if H4AS_QUQUE_ON_CANNOT_WRITE
                 // [x] if copy flag, then copy the data itself and manage it...
@@ -836,22 +761,13 @@ err_t H4AsyncClient::__TX(const uint8_t* data,size_t len,bool copy, uint8_t* cop
                     }
                 }
                 h4.queueFunction([this,newdata,left,copy,copy_data](){ TX(newdata,left,copy,copy_data);});
-                return ERR_OK;
+                return;
 #endif
             }
-            else
-            {
-                H4AT_PRINT1("c=%p __TX While close! p=%p\n", this, pcb);
-                _notify(0, H4AT_CLOSING);
-                break;
-            }
         }
-    } else {
-        H4AT_PRINT1("%p __TX called %s!\n", this, _closing ? "during close" : "before connect");
-        _notify(0,H4AT_CLOSING);
     }
     if (copy_data) free(copy_data);
-    return ERR_OK;
+    return;
 }
 
 #if H4AT_TLS
@@ -870,5 +786,29 @@ void H4AsyncClient::secureTLS(const u8_t * ca, size_t ca_len, const u8_t * privk
     _keys[H4AT_TLS_CERTIFICATE] = new mbx{const_cast<u8_t*>(cert), cert_len};
 
     _tls_mode = H4AT_TLS_TWO_WAY;
+}
+#endif
+#if H4AT_TLS_CHECKER
+bool H4AsyncClient::isCertValid(const u8_t *cert, size_t cert_len)
+{
+    static mbedtls_x509_crt chain;
+    auto r = mbedtls_x509_crt_parse(&chain, cert, cert_len);
+    if (r)
+        H4AT_PRINTF("Certificate validation returned %x [%d]\n", r, r);
+    H4AT_PRINTF("Certificate(s) parsing %s\n", r ? "Failed" : "Succeeded");
+
+	return (r==0);
+}
+bool H4AsyncClient::isPrivKeyValid(const u8_t *privkey, size_t privkey_len,
+                                                    const u8_t *privkey_pass, size_t privkey_pass_len)
+{
+    static mbedtls_pk_context ctx;
+    mbedtls_pk_init(&ctx);
+    auto r = mbedtls_pk_parse_key(&ctx, privkey, privkey_len, privkey_pass, privkey_pass_len); // Future versions requires RNGs (function f_rng, parameter p_rng)
+    mbedtls_pk_free(&ctx);
+    if (r)
+        H4AT_PRINTF("Private Key Validation Returned %x [%d]\n", r, r);
+    H4AT_PRINTF("Private Key Parsing %s\n", r ? " Failed" : "Succeeded");
+	return (r==0);
 }
 #endif

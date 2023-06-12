@@ -35,7 +35,8 @@ SOFTWARE.
 */
 #define H4AT_DEBUG 0
 #define H4AS_SCAVENGE_FREQ 20000
-#define H4AT_USE_TLS    1
+#define H4AT_USE_TLS        1
+#define H4AT_TLS_CHECKER    1 // for isCertValid() and isPrivKeyValid()
 
 #if NO_SYS
 #define H4AS_QUQUE_ON_CANNOT_WRITE  false

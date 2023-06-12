@@ -33,7 +33,7 @@ SOFTWARE.
 // https://lists.nongnu.org/archive/html/lwip-users/2010-03/msg00142.html "Listening connection issue"
 
 bool H4AsyncServer::_bakov=false;
-static err_t _raw_accept(void *arg, struct altcp_pcb *p, err_t err){
+err_t _raw_accept(void *arg, struct altcp_pcb *p, err_t err){
     H4AT_PRINT1("RAW _raw_accept <-- arg=%p p=%p e=%d\n",arg,p,err);
     if ((err != ERR_OK) || (p == NULL))
         return ERR_VAL;
@@ -46,30 +46,37 @@ static err_t _raw_accept(void *arg, struct altcp_pcb *p, err_t err){
             H4AT_PRINT1("LOW HEAP %u DISCARDING %p\n",_HAL_freeHeap(),p);
             return ERR_MEM;
         }
-        auto c=srv->_instantiateRequest(p); // Needs to be processed within lwip thread.
-        h4.queueFunction([=](){
-                    H4AT_PRINT1("NEW CONNECTION %p --> pcb=%p state=%d\n",c,p,p->state);
-                    if(c){
-                        c->_lastSeen=millis();
-                        c->onError([=](int e,int i){
-                            if(e==ERR_MEM){
-                                H4AT_PRINT1("OOM ERROR %d\n",i); // Retry-After: 120
-                                return false;
-                            } 
-                            if(srv->_srvError) 
-                                return srv->_srvError(e,i);
-                            return true;
-                        });
-                       H4AT_PRINT3("QF 1 %p\n",c);
-                        c->onRX([=](const uint8_t* data,size_t len){ srv->route(c,data,len); });
-                       H4AT_PRINT3("QF insert c --> in %p\n",c);
-                        H4AsyncClient::openConnections.insert(c);
-                        H4AsyncClient::checkPCBs("ACCEPT", 1);
-                        // h4.queueFunction([](){ H4AsyncClient::checkPCBs("ACCEPT", 1); });
-                        
-                       H4AT_PRINT3("QF insert c --> out %p\n",c);
-                    } else H4AT_PRINT1("_instantiateRequest returns WRONG VALUE !!!!! p=%p c=%p\n",p,c); // Might abort/close the connection
-        });
+        auto c=srv->_instantiateRequest(p); // Needs to set callbacks now; to catch the request in our callback. 
+        heap_caps_check_integrity_all(true);
+        if(c){
+            h4.queueFunction([=](){
+                            H4AT_PRINT1("NEW CONNECTION %p --> pcb=%p state=%d\n",c,p,getTCPState(p));
+                            if (c->__willClose || c->_closing) {
+                                H4AT_PRINT1("%p %p",c,p, c->__willClose? "WILL CLOSE" : "CLOSING");
+                                return;
+                            }
+                            c->_lastSeen=millis();
+                            c->onError([=](int e,int i){
+                                if(e==ERR_MEM){
+                                    H4AT_PRINT1("OOM ERROR %d\n",i); // Retry-After: 120
+                                    return false;
+                                } 
+                                if(srv->_srvError) 
+                                    return srv->_srvError(e,i);
+                                return true;
+                            });
+                            H4AT_PRINT3("QF 1 %p\n",c);
+                            c->onRX([=](const uint8_t* data,size_t len){ srv->route(c,data,len); });
+                            H4AT_PRINT3("QF insert c --> in %p\n",c);
+                            H4AsyncClient::openConnections.insert(c);
+                            H4AsyncClient::checkPCBs("ACCEPT", 1);
+                            heap_caps_check_integrity_all(true);
+                            H4AT_PRINT3("QF insert c --> out %p\n",c);
+                    });
+        } else {
+            H4AT_PRINT1("_instantiateRequest returns WRONG VALUE !!!!! p=%p c=%p\n", p, c); // Might abort/close the connection
+            return ERR_MEM;
+        }
     } // else H4AT_PRINT1("RAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAW %d\n",err);
 
     return ERR_OK;
@@ -85,6 +92,7 @@ H4AsyncClient*  H4AsyncServer::_instantiateRequest(struct altcp_pcb *p){
 void H4AsyncServer::begin(){
 //    h4.every(1000,[]{ heap_caps_check_integrity_all(true); });
     H4AT_PRINT1("SERVER %p listening on port %d\n",this,_port);
+    LwIPCoreLocker lock;
 #if LWIP_ALTCP
     static altcp_allocator_t allocator;
 #if H4AT_TLS
@@ -121,8 +129,8 @@ void H4AsyncServer::begin(){
         if (err == ERR_OK) {
             _raw_pcb = altcp_listen(_raw_pcb);
             altcp_accept(_raw_pcb, _raw_accept);
-        } else Serial.printf("RAW CANT BIND\n");
-    }  else Serial.printf("RAW CANT GET NEW PCB\n");
+        } //else Serial.printf("RAW CANT BIND\n");
+    }//  else Serial.printf("RAW CANT GET NEW PCB\n");
 }
 
 #if H4AT_TLS
@@ -139,4 +147,5 @@ void H4AsyncServer::secureTLS(const u8_t *privkey, size_t privkey_len,
     _secure = true;
 
 }
+
 #endif
