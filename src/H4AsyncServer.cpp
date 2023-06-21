@@ -27,9 +27,6 @@ SOFTWARE.
 #include "lwip/altcp_tcp.h"
 #include "lwip/altcp_tls.h"
 
-#ifdef ARDUINO_ARCH_ESP32
-    #include "lwip/priv/tcpip_priv.h"
-#endif
 // https://lists.nongnu.org/archive/html/lwip-users/2010-03/msg00142.html "Listening connection issue"
 
 bool H4AsyncServer::_bakov=false;
@@ -47,14 +44,15 @@ err_t _raw_accept(void *arg, struct altcp_pcb *p, err_t err){
             return ERR_MEM;
         }
         auto c=srv->_instantiateRequest(p); // Needs to set callbacks now; to catch the request in our callback. 
+        // c->_is
         heap_caps_check_integrity_all(true);
         if(c){
             h4.queueFunction([=](){
-                            H4AT_PRINT1("NEW CONNECTION %p --> pcb=%p state=%d\n",c,p,getTCPState(p));
-                            if (c->__willClose || c->_closing) {
-                                H4AT_PRINT1("%p %p",c,p, c->__willClose? "WILL CLOSE" : "CLOSING");
+                            if (c->pcb == NULL || c->__willClose || c->_closing) {
+                                H4AT_PRINT1("%p %p",c,p, (!c->pcb) ? "PCB FREED" : (c->__willClose ? "WILL CLOSE" : "CLOSING"));
                                 return;
                             }
+                            H4AT_PRINT1("NEW CONNECTION %p --> pcb=%p state=%d\n",c,p, c->pcb ? getTCPState(p, c->_isSecure):-1); // [x] getTCPState might result Undefined Behavior if pcb is freed beforehand
                             c->_lastSeen=millis();
                             c->onError([=](int e,int i){
                                 if(e==ERR_MEM){
@@ -94,21 +92,39 @@ void H4AsyncServer::begin(){
     H4AT_PRINT1("SERVER %p listening on port %d\n",this,_port);
     LwIPCoreLocker lock;
 #if LWIP_ALTCP
-    static altcp_allocator_t allocator;
+    altcp_allocator_t allocator;
 #if H4AT_TLS
     H4AT_PRINT1("_secure=%d\n", _secure);
-    struct altcp_tls_config * conf = nullptr;
+    testAllocs();
+
+    altcp_tls_config * conf = nullptr;
+    altcp_pcb* _raw_pcb = nullptr;
     if (_secure){
         H4AT_PRINT1("Setting up secured server\n");
         auto &privkey = _keys[H4AT_TLS_PRIVATE_KEY];
         auto &privkey_pass = _keys[H4AT_TLS_PRIVAKE_KEY_PASSPHRASE];
         auto &cert = _keys[H4AT_TLS_CERTIFICATE];
-
+        // dumphex(privkey->data, privkey->len);
+        // dumphex(cert->data, cert->len);
+        testAllocs();
+        if (privkey_pass)
+            dumphex(privkey_pass->data, privkey_pass->len);
         conf = altcp_tls_create_config_server_privkey_cert(privkey->data, privkey->len,
                                                             privkey_pass? privkey_pass->data : NULL, privkey_pass ? privkey_pass->len : 0,
                                                             cert->data, cert->len);
+        testAllocs();
+        H4AT_PRINT1("SERVER conf=%p\n", conf);
         if (conf)
-            allocator = altcp_allocator_t {altcp_tls_alloc, conf};
+        {
+            testAllocs();
+            allocator = altcp_allocator_t{altcp_tls_alloc, conf};
+            H4AT_PRINT1("before altcp_tls_new()\n");
+            testAllocs();
+            _raw_pcb = altcp_tls_new(conf, IPADDR_TYPE_ANY);
+            H4AT_PRINT1("after altcp_tls_new()\n");
+            testAllocs();
+            H4AT_PRINT1("_raw_pcb=%p\n", _raw_pcb);
+        }
         else
         {
             H4AT_PRINT1("INVALID TLS CONFIGURATION\n");
@@ -118,10 +134,12 @@ void H4AsyncServer::begin(){
     else {
         H4AT_PRINT1("Setting up unsecured server\n");
         allocator = altcp_allocator_t {altcp_tcp_alloc, conf};
+        _raw_pcb = altcp_new(&allocator);
     }
 #endif
-#endif
+#else
     auto _raw_pcb = altcp_new(&allocator);
+#endif
     if (_raw_pcb != NULL) {
         err_t err;
         altcp_arg(_raw_pcb,this);
@@ -129,8 +147,8 @@ void H4AsyncServer::begin(){
         if (err == ERR_OK) {
             _raw_pcb = altcp_listen(_raw_pcb);
             altcp_accept(_raw_pcb, _raw_accept);
-        } //else Serial.printf("RAW CANT BIND\n");
-    }//  else Serial.printf("RAW CANT GET NEW PCB\n");
+        } else Serial.printf("RAW CANT BIND\n");
+    } else Serial.printf("RAW CANT GET NEW PCB\n");
 }
 
 #if H4AT_TLS

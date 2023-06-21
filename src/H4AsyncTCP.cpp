@@ -39,9 +39,6 @@ For example, other rights such as publicity, privacy, or moral rights may limit 
 #include "lwip/altcp_tls.h"
 #include "lwip/dns.h"
 
-// #ifdef ARDUINO_ARCH_ESP32
-// #include "lwip/priv/tcpip_priv.h"
-// #endif
 #if H4AT_TLS_CHECKER
 #include "mbedtls/x509_crt.h"
 #include "mbedtls/pk.h"
@@ -126,27 +123,49 @@ static const char * const tcp_state_str[] = {
 };
 #endif
 
-enum tcp_state getTCPState(struct altcp_pcb *conn) {
+enum tcp_state getTCPState(struct altcp_pcb *conn, bool tls) {
 #if LWIP_ALTCP
     LwIPCoreLocker lock;
     if (conn) {
-        struct tcp_pcb *pcb = (struct tcp_pcb *)conn->state;
-        if (conn->inner_conn) return (tcp_state)-1;
-        if (pcb)
-            return pcb->state;
+        if (tls){
+            if (conn->inner_conn && conn->inner_conn->state) {
+                auto inner_state = conn->inner_conn->state;
+                struct tcp_pcb *pcb = (struct tcp_pcb *)inner_state;
+                if (pcb)
+                    return pcb->state;
+            }
+
+        } else {
+            struct tcp_pcb *pcb = (struct tcp_pcb *)conn->state;
+            if (conn->inner_conn) return (tcp_state)-1;
+            if (pcb)
+                return pcb->state;
+        }
     }
     H4AT_PRINT1("GETSTATE %p NO CONN\n", conn);
     return CLOSED;
 
+    if (tls){
+        if (conn && conn->inner_conn)
+        {
+            auto inner = conn->inner_conn;
+            struct tcp_pcb *pcb = (struct tcp_pcb *)inner->state;
+            if (pcb)
+                return pcb->state;
+        }
+        return CLOSED;
+    }else {
+        if (conn) {
+            struct tcp_pcb *pcb = (struct tcp_pcb *)conn->state;
+            if (conn->inner_conn) return (tcp_state)-1;
+            if (pcb)
+                return pcb->state;
+        }
+        H4AT_PRINT1("GETSTATE %p NO CONN\n", conn);
+        return CLOSED;
+    }
+
     //* For TLS, this is the code:
-    // if (conn && conn->inner_conn)
-    // {
-    //     auto inner = conn->inner_conn;
-    //     struct tcp_pcb *pcb = (struct tcp_pcb *)inner->state;
-    //     if (pcb)
-    //         return pcb->state;
-    // }
-    // return CLOSED;
 #else
     return conn->state;
 #endif
@@ -154,13 +173,13 @@ enum tcp_state getTCPState(struct altcp_pcb *conn) {
 
 
 void H4AsyncClient::printState(std::string context){
-    auto state = getTCPState(pcb);
+    auto state = getTCPState(pcb, _isSecure);
     H4AT_PRINT2("%s\tpcb=%p s=%d \"%s\"\n", context.c_str(), pcb, state, (state >= CLOSED && state <=TIME_WAIT)? tcp_state_str[state]:"???");
 }
 
 void H4AsyncClient::retryClose(H4AsyncClient* c,altcp_pcb *pcb)
 {
-    auto state = getTCPState(pcb);
+    auto state = getTCPState(pcb, c->_isSecure);
     Serial.printf("retryClose %p state=%d\n", pcb, state);
     // Check the presence of the PCB with other Clients ??
     auto checkOtherOwners = [c,pcb] (std::unordered_set<H4AsyncClient*>& set){
@@ -240,7 +259,7 @@ void H4AsyncClient::_shutdown() {
     if(pcb){
         heap_caps_check_integrity_all(true);
 
-        auto state = getTCPState(pcb);
+        auto state = getTCPState(pcb, _isSecure);
         
         H4AT_PRINT1("RAW 1 PCB=%p STATE=%d \"%s\"\n",pcb,state,(state >= CLOSED && state <=TIME_WAIT)? tcp_state_str[state]:"???");
         if (state >= CLOSED) // Valid PCB...
@@ -321,7 +340,7 @@ void _raw_error(void *arg, err_t err){
 err_t _raw_recv(void *arg, struct altcp_pcb *tpcb, struct pbuf *p, err_t err){
     H4AT_PRINT1("_raw_recv %p tpcb=%p p=%p err=%d data=%p tot_len=%d\n",arg,tpcb,p, err, p ? p->payload:0,p ? p->tot_len:0);
     auto rq=reinterpret_cast<H4AsyncClient*>(arg);
-    H4AT_PRINT2("_closing=%d _wc=%d\n", rq->_closing, rq->__willClose);
+    // H4AT_PRINT2("_closing=%d _wc=%d\n", rq->_closing, rq->__willClose);
     if (((p == NULL || err!=ERR_OK) && rq->pcb) || rq->_closing) {
         H4AT_PRINT1("Calling _willClose()\n");
         rq->_willClose();
@@ -426,18 +445,21 @@ void _tcp_dns_found(const char * name, struct ip_addr * ipaddr, void * arg) {
 //
 //
 //
+
 H4AsyncClient::H4AsyncClient(struct altcp_pcb *newpcb): pcb(newpcb){
 //    _heapLO=(_HAL_freeHeap() * H4T_HEAP_CUTOUT_PC) / 100;
 //    _heapHI=(_HAL_freeHeap() * H4T_HEAP_CUTIN_PC) / 100;
     H4AT_PRINT1("H4AC CTOR %p PCB=%p\n",this,pcb);
     if(pcb){ // H4AsyncServer receives the pcb, already connected.
         // A server.
+        // [ ] if(getTCPState(pcb) == ESTABLISHED) .. ? (If queued, now it's called directly on _raw_accept)
         LwIPCoreLocker lock;
         altcp_arg(pcb, this);
         altcp_recv(pcb, &_raw_recv);
         altcp_err(pcb, &_raw_error);
         altcp_sent(pcb, &_raw_sent);
         heap_caps_check_integrity_all(true);
+        _isSecure=pcb->inner_conn != NULL;
         _lastSeen=millis();
     }
     else
@@ -460,7 +482,7 @@ void H4AsyncClient::_clearDanglingInput() {
 
 
 void  H4AsyncClient::_parseURL(const std::string& url){
-    Serial.printf("_parseULR(%s) find=%d\n", url, url.find("http",0));
+    Serial.printf("_parseULR(%s) find=%d\n", url.c_str(), url.find("http",0));
     if(url.find("http",0)) _parseURL(std::string("http://")+url);
     else {
         std::vector<std::string> vs=split(url,"//");
@@ -570,22 +592,28 @@ void H4AsyncClient::__scavenge()
 }
 
 void H4AsyncClient::_connect() {
-    H4AT_PRINT2("_connect p=%p state=%d\n",pcb, pcb ? getTCPState(pcb) : -1);
+    H4AT_PRINT2("_connect p=%p state=%d\n",pcb, pcb ? getTCPState(pcb, _isSecure) : -1);
     LwIPCoreLocker lock;
 #if LWIP_ALTCP
     static altcp_allocator_t allocator {altcp_tcp_alloc, nullptr};
 #if H4AT_TLS
     H4AT_PRINT1("_URL.secure=%d\ttls_mode=%d\n", _URL.secure, _tls_mode);
+    H4AT_PRINT4("PCB=%p\n", pcb);
+    testAllocs();
+    altcp_tls_config* conf;
     if (_URL.secure && _tls_mode != H4AT_TLS_NONE){
-        H4AT_PRINT1("Setting the secure config\n");
+        H4AT_PRINT1("Setting the secure config PCB=%p\n", pcb);
+        testAllocs();
         // secure.
-        struct altcp_tls_config * conf = nullptr;
+        
         auto &ca_cert = _keys[H4AT_TLS_CA_CERTIFICATE];
+        _isSecure = true;
         switch (_tls_mode){
             case H4AT_TLS_ONE_WAY:
                 // if (ca_cert && ca_cert->data) // [ ] Shouldn't be needed.
+                // dumphex(ca_cert->data, ca_cert->len);s
                 conf = altcp_tls_create_config_client(ca_cert->data, ca_cert->len);
-                H4AT_PRINT2("ONE WAY TLS conf=%p\n", conf);
+                H4AT_PRINT2("ONE WAY TLS conf=%p PCB=%p\n", conf, pcb);
                 break;
 
             case H4AT_TLS_TWO_WAY:
@@ -603,10 +631,16 @@ void H4AsyncClient::_connect() {
                 break;
             default:
             H4AT_PRINT1("WRONG _tls_mode!\n");
-            _notify(0,H4AT_WRONG_TLS_MODE);
+            _notify(H4AT_WRONG_TLS_MODE);
         }
-        if (conf)
-            allocator = altcp_allocator_t {altcp_tls_alloc, conf};
+        if (conf) {
+
+            testAllocs();
+            allocator = altcp_allocator_t{altcp_tls_alloc, conf};
+            testAllocs();
+            pcb = altcp_tls_new(conf, IPADDR_TYPE_ANY);
+            H4AT_PRINT4("allocator= ... PCB=%p\n", pcb);
+        }
         else
         {
             H4AT_PRINT1("INVALID TLS CONFIGURATION\n");
@@ -615,15 +649,22 @@ void H4AsyncClient::_connect() {
     } else {
         H4AT_PRINT1("SETTING TCP CHANNEL\n");
         allocator = altcp_allocator_t {altcp_tcp_alloc, nullptr};
+        pcb = altcp_new(&allocator);
     }
 #endif
+#else
+    pcb = tcp_new();
 #endif
-    H4AT_PRINT3("tls_alloc=%p alloc=%p allocator.arg %p\n",altcp_tls_alloc, allocator.alloc, allocator.arg);
-    H4AT_PRINT3("pcb=%p\n");
-    if(!pcb) pcb=altcp_new(&allocator);
-    altcp_arg(this->pcb, this);
-    altcp_err(this->pcb, &_raw_error);
-    _notify(altcp_connect(this->pcb, &_URL.addr, _URL.port,(altcp_connected_fn)&_tcp_connected));
+    // H4AT_PRINT3("Before NEW pcb=%p\n", pcb);
+    // if(!pcb) pcb=altcp_new(&allocator);
+    // H4AT_PRINT3("After NEW pcb=%p\n",pcb);
+    if (!pcb) {
+        H4AT_PRINT1("NO PCB ASSIGNED!\n");
+        return;
+    }
+    altcp_arg(pcb, this);
+    altcp_err(pcb, &_raw_error);
+    _notify(altcp_connect(pcb, &_URL.addr, _URL.port,(altcp_connected_fn)&_tcp_connected));
     heap_caps_check_integrity_all(true);
 }
 
@@ -654,7 +695,7 @@ void H4AsyncClient::connect(IPAddress ip,uint16_t port){
     _connect();
 }
 
-bool H4AsyncClient::connected(){ return !__willClose && !_closing && pcb && getTCPState(pcb) == ESTABLISHED; }
+bool H4AsyncClient::connected(){ return !__willClose && !_closing && pcb && getTCPState(pcb, _isSecure) == ESTABLISHED; }
 
 std::string H4AsyncClient::errorstring(int e){
     #ifdef H4AT_DEBUG

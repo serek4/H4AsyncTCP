@@ -83,7 +83,7 @@ enum {
     template<int I, typename... Args>
     void H4AT_PRINT(const char* fmt, Args... args) {
         #ifdef ARDUINO_ARCH_ESP32
-        if (H4AT_DEBUG >= I) H4AT_PRINTF(std::string(std::string("H4AT:%d: H=%u M=%u S=%u ")+fmt).c_str(),I,_HAL_freeHeap(),_HAL_maxHeapBlock(),uxTaskGetStackHighWaterMark(NULL),args...);
+        if (H4AT_DEBUG >= I) H4AT_PRINTF(std::string(std::string("H4AT:%d: H=%u M=%u B=%u S=%u ")+fmt).c_str(),I,_HAL_freeHeap(),_HAL_maxHeapBlock(), _HAL_maxHeapBlock8Bit(),uxTaskGetStackHighWaterMark(NULL),args...);
         #else
         if (H4AT_DEBUG >= I) H4AT_PRINTF(std::string(std::string("H4AT:%d: H=%u M=%u ")+fmt).c_str(),I,_HAL_freeHeap(),_HAL_maxHeapBlock(),args...);
         #endif
@@ -118,7 +118,7 @@ struct altcp_pcb;
 #include "lwip/altcp.h"
 #endif
 // enum tcp_state;
-enum tcp_state getTCPState(struct altcp_pcb *conn);
+enum tcp_state getTCPState(struct altcp_pcb *conn, bool tls=false);
 
 class H4AsyncClient;
 
@@ -134,6 +134,8 @@ class H4AsyncClient {
         friend  err_t   _raw_recv(void *arg, struct altcp_pcb *tpcb, struct pbuf *p, err_t err);
         friend  err_t   _raw_accept(void *arg, struct altcp_pcb *p, err_t err);
 
+                bool                _isServer=false;
+                bool                _isSecure=false;
 #if H4AT_TLS
                 std::array<mbx*,4>  _keys {nullptr,nullptr,nullptr,nullptr};
                 enum {
