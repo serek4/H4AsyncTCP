@@ -27,8 +27,6 @@ SOFTWARE.
 #include "lwip/altcp_tcp.h"
 #include "lwip/altcp_tls.h"
 
-// https://lists.nongnu.org/archive/html/lwip-users/2010-03/msg00142.html "Listening connection issue"
-
 bool H4AsyncServer::_bakov=false;
 err_t _raw_accept(void *arg, struct altcp_pcb *p, err_t err){
     H4AT_PRINT1("RAW _raw_accept <-- arg=%p p=%p e=%d\n",arg,p,err);
@@ -44,8 +42,6 @@ err_t _raw_accept(void *arg, struct altcp_pcb *p, err_t err){
             return ERR_MEM;
         }
         auto c=srv->_instantiateRequest(p); // Needs to set callbacks now; to catch the request in our callback. 
-        // c->_is
-        heap_caps_check_integrity_all(true);
         if(c){
             h4.queueFunction([=](){
                             if (c->pcb == NULL || c->__willClose || c->_closing) {
@@ -68,7 +64,6 @@ err_t _raw_accept(void *arg, struct altcp_pcb *p, err_t err){
                             H4AT_PRINT3("QF insert c --> in %p\n",c);
                             H4AsyncClient::openConnections.insert(c);
                             H4AsyncClient::checkPCBs("ACCEPT", 1);
-                            heap_caps_check_integrity_all(true);
                             H4AT_PRINT3("QF insert c --> out %p\n",c);
                     });
         } else {
@@ -86,60 +81,42 @@ H4AsyncClient*  H4AsyncServer::_instantiateRequest(struct altcp_pcb *p){
     auto c=new H4AsyncClient(p);
     return c;
 };
-// altcp_allocator_t* tcp_allocator = new altcp_allocator_t{altcp_tcp_alloc, nullptr};
-void H4AsyncServer::begin(){
+
+void H4AsyncServer::begin() {
 //    h4.every(1000,[]{ heap_caps_check_integrity_all(true); });
     H4AT_PRINT1("SERVER %p listening on port %d\n",this,_port);
     LwIPCoreLocker lock;
 #if LWIP_ALTCP
     altcp_allocator_t allocator;
 #if H4AT_TLS
-    H4AT_PRINT1("_secure=%d\n", _secure);
-    testAllocs();
-
     altcp_tls_config * conf = nullptr;
-    altcp_pcb* _raw_pcb = nullptr;
-    if (_secure){
+    // altcp_pcb* _raw_pcb = nullptr;
+    if (_secure) {
         H4AT_PRINT1("Setting up secured server\n");
         auto &privkey = _keys[H4AT_TLS_PRIVATE_KEY];
         auto &privkey_pass = _keys[H4AT_TLS_PRIVAKE_KEY_PASSPHRASE];
         auto &cert = _keys[H4AT_TLS_CERTIFICATE];
-        // dumphex(privkey->data, privkey->len);
-        // dumphex(cert->data, cert->len);
-        testAllocs();
-        if (privkey_pass)
-            dumphex(privkey_pass->data, privkey_pass->len);
         conf = altcp_tls_create_config_server_privkey_cert(privkey->data, privkey->len,
                                                             privkey_pass? privkey_pass->data : NULL, privkey_pass ? privkey_pass->len : 0,
                                                             cert->data, cert->len);
-        testAllocs();
-        H4AT_PRINT1("SERVER conf=%p\n", conf);
-        if (conf)
-        {
-            testAllocs();
+        H4AT_PRINT3("SERVER conf=%p\n", conf);
+        if (conf) {
             allocator = altcp_allocator_t{altcp_tls_alloc, conf};
-            H4AT_PRINT1("before altcp_tls_new()\n");
-            testAllocs();
-            _raw_pcb = altcp_tls_new(conf, IPADDR_TYPE_ANY);
-            H4AT_PRINT1("after altcp_tls_new()\n");
-            testAllocs();
-            H4AT_PRINT1("_raw_pcb=%p\n", _raw_pcb);
         }
-        else
-        {
+        else {
             H4AT_PRINT1("INVALID TLS CONFIGURATION\n");
-            if (_srvError) _srvError(0,H4AT_BAD_TLS_CONFIG);
+            if (_srvError) _srvError(H4AT_BAD_TLS_CONFIG,0);
+            return; // Don't initiate an unsecured webserver
         }
     }
     else {
         H4AT_PRINT1("Setting up unsecured server\n");
         allocator = altcp_allocator_t {altcp_tcp_alloc, conf};
-        _raw_pcb = altcp_new(&allocator);
     }
 #endif
 #else
-    auto _raw_pcb = altcp_new(&allocator);
 #endif
+    auto _raw_pcb = altcp_new_ip_type(&allocator, IPADDR_TYPE_ANY);
     if (_raw_pcb != NULL) {
         err_t err;
         altcp_arg(_raw_pcb,this);
@@ -147,8 +124,8 @@ void H4AsyncServer::begin(){
         if (err == ERR_OK) {
             _raw_pcb = altcp_listen(_raw_pcb);
             altcp_accept(_raw_pcb, _raw_accept);
-        } else Serial.printf("RAW CANT BIND\n");
-    } else Serial.printf("RAW CANT GET NEW PCB\n");
+        } else H4AT_PRINT1("RAW CANT BIND\n");
+    } else H4AT_PRINT1("RAW CANT GET NEW PCB\n");
 }
 
 #if H4AT_TLS
@@ -163,7 +140,5 @@ void H4AsyncServer::secureTLS(const u8_t *privkey, size_t privkey_len,
     _keys[H4AT_TLS_CERTIFICATE] = new mbx{const_cast<u8_t*>(cert), cert_len};
 
     _secure = true;
-
 }
-
 #endif

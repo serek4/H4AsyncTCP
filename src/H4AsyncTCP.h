@@ -72,6 +72,7 @@ enum {
     H4AT_CLOSING,
     H4AT_UNCONNECTED,
     H4AT_OUTPUT_TOO_BIG,
+    H4AT_ERR_NO_PCB,
 #if H4AT_TLS
     H4AT_BAD_TLS_CONFIG,
     H4AT_WRONG_TLS_MODE,
@@ -111,13 +112,11 @@ enum {
     #define H4AT_DUMP4(...)
 #endif
 
-// struct tcp_pcb;
 #if LWIP_ALTCP
 struct altcp_pcb;
 #else
-#include "lwip/altcp.h"
+#include "lwip/altcp.h" // Contains appropriate preprocessors if TLS macros aren't defined.
 #endif
-// enum tcp_state;
 enum tcp_state getTCPState(struct altcp_pcb *conn, bool tls=false);
 
 class H4AsyncClient;
@@ -180,13 +179,7 @@ class H4AsyncClient {
                 size_t              _stored=0;
 
         H4AsyncClient(altcp_pcb* p=0);
-        virtual ~H4AsyncClient(){
-                                    H4AT_PRINT2("H4AsyncClient DTOR %p pcb=%p _bpp=%p\n", this, pcb, _bpp); 
-#if H4AT_TLS
-                                    for (auto& key : _keys)
-                                        if (key && key->data) key->clear();
-#endif
-                                }
+        virtual ~H4AsyncClient();
                 void                close(){ _shutdown(); }
                 void                connect(const std::string& host,uint16_t port);
                 void                connect(IPAddress ip,uint16_t port);
