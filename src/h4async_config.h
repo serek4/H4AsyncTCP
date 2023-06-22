@@ -24,7 +24,7 @@ SOFTWARE.
 */
 #pragma once
 #include <lwip/opt.h>
-#define H4AT_VERSION "0.0.11-altcp"
+#define H4AT_VERSION "0.0.12"
 /*
     Debug levels: 
     0 - No debug messages, no debug functions

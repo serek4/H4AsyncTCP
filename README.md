@@ -3,9 +3,55 @@
 # H4AsyncTCP
 
 ## ArduinoIDE library: Asynchronous TCP Rx/Tx Client and abstract Asynchronous server
-## altcp branch:
-Holds a working TCP over LwIP ALTCP on ESP32 - requires a custom [arduino-esp32 build](https://github.com/HamzaHajeir/arduino-esp32/tree/lwip-tls) that enables LwIP TCP.
-The goal is to fully support TLS over ALTCP_TLS port, which LwIP provides.
+
+## TLS Support:
+TLS is now supported on ESP32, currently cannot be compiled to esp8266 because of missing headers within arduino core, until we could support it, please contact us to setup the workarounds.
+
+For ESP32, currently it requires a custom [arduino-esp32 build](https://github.com/HamzaHajeir/arduino-esp32/tree/lwip-tls) that enables LwIP ALTCP and TLS.  
+
+
+### Usage:
+### Client:
+- Setup The custom arduino core.
+  - For PlatformIO:
+```ini
+  platform = espressif32@6.3.1
+  board = esp32doit-devkit-v1
+  platform_packages =
+      platformio/framework-arduinoespressif32 @ https://github.com/HamzaHajeir/arduino-esp32#lwip-tls
+```
+- Ensure `H4AT_USE_TLS` is defined `1` in the configuration file.
+- For clients, call `secureTLS` providing all needed information before calling `connect`. 
+```cpp
+    #define TWO_WAY_AUTH 1
+
+    H4AsyncClient* client=new H4AsyncClient();
+    client->onRX([=](const uint8_t* data, size_t len){ handleData(i,(void*) data,len); });
+    std::string ca = "...";
+    int ca_len = ca.length()+1; // +1 for PEM encoded certificates, where it should include the null terminator.
+#if TWO_WAY_AUTH
+    std::string privkey = "...";
+    int privkey_len = privkey.length()+1;
+    std::string privkey_pass = "..."; // The key that encrypts the private key, it's optional.
+    int privkey_pass_len = privkey_pass.length();
+    std::string cert = "...";
+    int cert_len = cert.length() + 1;
+    client->secureTLS((const uint8_t*) ca.data(), ca_len, (const uint8_t*) privkey.data(), privkey_len, (const uint8_t*) privkey_pass.data(), privkey_pass_len, (const uint8_t*) cert, cert_len)
+#else /* TWO_WAY_AUTH */
+    client->secureTLS((const uint8_t*) ca.data(), ca_len);
+#endif /* TWO_WAY_AUTH */
+    client->connect("https://example.com",443);
+
+```
+
+### Server:
+Same as described in the previous section, but `H4AsyncServer::secureTLS` should be called on just after boot, anytime before `H4AsyncServer::begin()` is called, and only once.
+
+
+## Version 0.0.12
+Major and deep fixs of TCP usage, including crashes caused by memory corruption and bad timing.  
+Transitioning from `tcpip_api_call` to use LwIP thread locks.  
+And TLS support.
 
 ## Version 0.0.11
 * Fixes missing lwip configuration (NO_SYS) at `h4async_config.h`.

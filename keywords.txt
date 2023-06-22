@@ -42,6 +42,7 @@ remoteIPstring	KEYWORD2
 reset	KEYWORD2
 route	KEYWORD2
 TX	KEYWORD2
+secureTLS KEYWORD2
 
 #######################################
 # Constants (LITERAL1)
