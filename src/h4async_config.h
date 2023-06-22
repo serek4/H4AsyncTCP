@@ -24,7 +24,7 @@ SOFTWARE.
 */
 #pragma once
 #include <lwip/opt.h>
-#define H4AT_VERSION "0.0.11"
+#define H4AT_VERSION "0.0.11-altcp"
 /*
     Debug levels: 
     0 - No debug messages, no debug functions
@@ -35,6 +35,8 @@ SOFTWARE.
 */
 #define H4AT_DEBUG 0
 #define H4AS_SCAVENGE_FREQ 20000
+#define H4AT_USE_TLS        1
+#define H4AT_TLS_CHECKER    1 // for isCertValid() and isPrivKeyValid()
 
 #if NO_SYS
 #define H4AS_QUQUE_ON_CANNOT_WRITE  false
@@ -43,4 +45,10 @@ SOFTWARE.
 #define H4AS_QUQUE_ON_CANNOT_WRITE  true
 #define H4AS_WRITE_TIMEOUT 3000
 #define H4AS_RTOS_GET_THREAD_NAME   pcTaskGetName(NULL) // For FreeRTOS (ESP32)
+#endif
+
+#if LWIP_ALTCP && LWIP_ALTCP_TLS && LWIP_ALTCP_TLS_MBEDTLS
+#define H4AT_TLS        H4AT_USE_TLS
+#else
+#define H4AT_TLS        0
 #endif

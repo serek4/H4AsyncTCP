@@ -35,9 +35,8 @@ For example, other rights such as publicity, privacy, or moral rights may limit 
 #include<Arduino.h>
 
 #define LWIP_INTERNAL
-extern "C"{
-  #include "lwip/err.h"
-}
+#include "lwip/err.h"
+#include "lwip/tcpbase.h"
 
 #ifdef ARDUINO_ARCH_ESP8266
     #include<ESP8266WiFi.h>
@@ -55,6 +54,14 @@ extern "C"{
 #include<queue>
 #include<unordered_set>
 
+#if H4AT_TLS
+enum {
+    H4AT_TLS_PRIVATE_KEY,
+    H4AT_TLS_PRIVAKE_KEY_PASSPHRASE,
+    H4AT_TLS_CERTIFICATE,
+    H4AT_TLS_CA_CERTIFICATE
+};
+#endif
 enum {
     H4AT_ERR_DNS_FAIL,
     H4AT_ERR_DNS_NF,
@@ -63,7 +70,13 @@ enum {
     H4AT_HEAP_LIMITER_LOST,
     H4AT_INPUT_TOO_BIG,
     H4AT_CLOSING,
+    H4AT_UNCONNECTED,
     H4AT_OUTPUT_TOO_BIG,
+    H4AT_ERR_NO_PCB,
+#if H4AT_TLS
+    H4AT_BAD_TLS_CONFIG,
+    H4AT_WRONG_TLS_MODE,
+#endif
     H4AT_MAX_ERROR
 };
 #if H4AT_DEBUG
@@ -71,7 +84,7 @@ enum {
     template<int I, typename... Args>
     void H4AT_PRINT(const char* fmt, Args... args) {
         #ifdef ARDUINO_ARCH_ESP32
-        if (H4AT_DEBUG >= I) H4AT_PRINTF(std::string(std::string("H4AT:%d: H=%u M=%u S=%u ")+fmt).c_str(),I,_HAL_freeHeap(),_HAL_maxHeapBlock(),uxTaskGetStackHighWaterMark(NULL),args...);
+        if (H4AT_DEBUG >= I) H4AT_PRINTF(std::string(std::string("H4AT:%d: H=%u M=%u B=%u S=%u ")+fmt).c_str(),I,_HAL_freeHeap(),_HAL_maxHeapBlock(), _HAL_maxHeapBlock8Bit(),uxTaskGetStackHighWaterMark(NULL),args...);
         #else
         if (H4AT_DEBUG >= I) H4AT_PRINTF(std::string(std::string("H4AT:%d: H=%u M=%u ")+fmt).c_str(),I,_HAL_freeHeap(),_HAL_maxHeapBlock(),args...);
         #endif
@@ -99,29 +112,37 @@ enum {
     #define H4AT_DUMP4(...)
 #endif
 
-struct tcp_pcb;
+#if LWIP_ALTCP
+struct altcp_pcb;
+#else
+#include "lwip/altcp.h" // Contains appropriate preprocessors if TLS macros aren't defined.
+#endif
+enum tcp_state getTCPState(struct altcp_pcb *conn, bool tls=false);
 
 class H4AsyncClient;
 
 using H4AT_NVP_MAP      =std::unordered_map<std::string,std::string>;
 using H4AT_FN_ERROR     =std::function<bool(int,int)>;
 using H4AT_FN_RXDATA    =std::function<void(const uint8_t* data, size_t len)>;
-
 class H4AsyncClient {
-                err_t               __TX(const uint8_t* data,size_t len,bool copy=true, uint8_t* copied_data=nullptr);
-                err_t               __shutdown(bool aborted=false);
-                err_t               __connect(tcp_pcb* pcb = nullptr);
-        static  void                __assignServer(H4AsyncClient* client, tcp_pcb* pcb);
         static  void                __scavenge();
         static  bool                _scavenging;
                 void                _parseURL(const std::string& url);
-#if NO_SYS == 0
-        friend  err_t               _tcp_tx_api(struct tcpip_api_call_data *api_call_params);
-        friend  err_t               _tcp_connect_api(struct tcpip_api_call_data *api_call_params);
-        friend  err_t               _tcp_shutdown_api(struct tcpip_api_call_data *api_call_params);
-        friend  err_t               _assignServer(struct tcpip_api_call_data *api_call_params);
-#endif
+                bool                __willClose=false;
+                void                _willClose() {__willClose = true;}
+        friend  err_t   _raw_recv(void *arg, struct altcp_pcb *tpcb, struct pbuf *p, err_t err);
+        friend  err_t   _raw_accept(void *arg, struct altcp_pcb *p, err_t err);
 
+                bool                _isServer=false;
+                bool                _isSecure=false;
+#if H4AT_TLS
+                std::array<mbx*,4>  _keys {nullptr,nullptr,nullptr,nullptr};
+                enum {
+                    H4AT_TLS_NONE,
+                    H4AT_TLS_ONE_WAY,
+                    H4AT_TLS_TWO_WAY
+                } _tls_mode = H4AT_TLS_NONE;
+#endif
     protected:
                 H4AT_FN_RXDATA      _rxfn=[](const uint8_t* data,size_t len){ Serial.printf("RXFN SAFETY\n"); dumphex(data,len); };
     public:
@@ -129,31 +150,8 @@ class H4AsyncClient {
         static  std::unordered_set<H4AsyncClient*> unconnectedClients;
 
                 void                printState(std::string context);
-        static  void                __retryClose(H4AsyncClient* c,tcp_pcb* pcb);
-        static  void                retryClose(H4AsyncClient* c,tcp_pcb* pcb);
-        static  void                checkPCBs(std::string context, int cxt = 0, bool forceprint=false){
-            static int count = 0;
-            static int active = 0;
-            if (cxt > 0) active++;
-            else if (cxt < 0) active--;
-
-            if (!forceprint && count++ % 20) return;
-            int total_active = 0;
-            for(auto& c:openConnections) total_active += c->pcb != nullptr;
-            for(auto& c:unconnectedClients) total_active += c->pcb != nullptr;
-            if (active != total_active) {
-                H4AT_PRINT1("ERROR: active=%d total_active=%d\n", active, total_active);
-            }
-#if H4AT_DEBUG > 1
-            H4AT_PRINTF("%s PCBs:\t",context.c_str());
-            // H4AT_PRINTF("openConnections: %d\ttotal_active: %d\n",openConnections.size(), total_active);
-            for (auto &c : openConnections)
-                if (c->pcb) {
-                    H4AT_PRINTF("%p\t", c->pcb);
-                }
-            H4AT_PRINTF("\n");
-#endif
-        }
+        static  void                retryClose(H4AsyncClient* c,altcp_pcb* pcb);
+        static  void                checkPCBs(std::string context, int cxt = 0, bool forceprint=false);
                 struct  URL {
                     std::string     scheme;
                     std::string     host;
@@ -177,11 +175,11 @@ class H4AsyncClient {
                 uint32_t            _lastSeen=0;
                 uint32_t            _creatTime=0;
                 bool                _nagle=false;
-                struct tcp_pcb      *pcb;
+                struct altcp_pcb    *pcb;
                 size_t              _stored=0;
 
-        H4AsyncClient(tcp_pcb* p=0);
-        virtual ~H4AsyncClient(){ H4AT_PRINT2("H4AsyncClient DTOR %p pcb=%p _bpp=%p\n", this, pcb, _bpp); }
+        H4AsyncClient(altcp_pcb* p=0);
+        virtual ~H4AsyncClient();
                 void                close(){ _shutdown(); }
                 void                connect(const std::string& host,uint16_t port);
                 void                connect(IPAddress ip,uint16_t port);
@@ -209,6 +207,17 @@ class H4AsyncClient {
                 uint16_t            remotePort();
                 void                TX(const uint8_t* d,size_t len,bool copy=true, uint8_t* copied_data=nullptr); // Don't provide copied_data - it's for internal use only
 
+#if H4AT_TLS
+                void                secureTLS(const u8_t *ca, size_t ca_len, const u8_t *privkey = nullptr, size_t privkey_len=0,
+                                            const u8_t *privkey_pass = nullptr, size_t privkey_pass_len = 0,
+                                            const u8_t *cert = nullptr, size_t cert_len = 0);
+
+#endif
+#if H4AT_TLS_CHECKER
+        static  bool                isCertValid(const u8_t *cert = nullptr, size_t cert_len = 0);
+        static  bool                isPrivKeyValid(const u8_t *privkey = nullptr, size_t privkey_len=0,
+                                                    const u8_t *privkey_pass = nullptr, size_t privkey_pass_len = 0);
+#endif
 // syscalls - just don't...
                 uint8_t*            _addFragment(const uint8_t* data,u16_t len);
                 void                _clearDanglingInput();
@@ -216,23 +225,63 @@ class H4AsyncClient {
                 void                _handleFragment(const uint8_t* data,u16_t len,u8_t flags);
                 void                _notify(int e,int i=0);
         static  void                _scavenge();
-                void                _shutdown(bool aborted = false);
+                void                _shutdown();
 
 };
 
 class H4AsyncServer {
+        static    bool              _bakov;
     protected:
             uint16_t                _port;
+            bool                    _secure;
+#if H4AT_TLS
+            std::array<mbx*,3>       _keys {nullptr,nullptr,nullptr};
+
+#endif
     public:
-            size_t                _heap_alloc=0;
+            size_t                _heap_alloc=0; // Single Server Accept heap usage.
             H4AT_FN_ERROR        _srvError;
         H4AsyncServer(uint16_t port): _port(port){}
         virtual ~H4AsyncServer(){}
+#if H4AT_TLS
+                void        secureTLS(const u8_t *privkey, size_t privkey_len,
+                                const u8_t *privkey_pass, size_t privkey_pass_len,
+                                const u8_t *cert, size_t cert_len);
+#endif
 
         virtual void        begin();
                 void        onError(H4AT_FN_ERROR f){ _srvError=f; }
-        virtual void        reset(){}
+        virtual void        reset(){
+#if H4AT_TLS
+            for (auto& key : _keys){
+                if (key && key->data)
+                    key->clear();
+            }
+            _secure = false;
+#endif
+        }
         virtual void        route(void* c,const uint8_t* data,size_t len)=0;
 
-        virtual H4AsyncClient* _instantiateRequest(struct tcp_pcb *p);
+        virtual H4AsyncClient* _instantiateRequest(struct altcp_pcb *p);
+        static  bool            checkMemory (const H4AsyncServer& srv) {
+                                            auto fh=_HAL_freeHeap();
+                                            auto _heapLO = H4AT_HEAP_THROTTLE_LO + srv._heap_alloc;
+                                            auto _heapHI = H4AT_HEAP_THROTTLE_HI + srv._heap_alloc;
+                                            H4AT_PRINT3("FREE HEAP %u LOW %u HIGH %u BKV %d\n",fh,_heapLO,_heapHI,_bakov);
+                                            if (fh < _heapLO || (_bakov && (fh < _heapHI))){
+                                                _bakov = true;
+                                                return false;
+                                            }
+                                            _bakov = false;
+                                            return true;
+                                        };
+};
+
+class LwIPCoreLocker {
+    static volatile int _locks;
+    bool _locked=false;
+public:    
+    LwIPCoreLocker();
+    void unlock();
+    ~LwIPCoreLocker();
 };
