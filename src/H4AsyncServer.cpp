@@ -44,11 +44,20 @@ err_t _raw_accept(void *arg, struct altcp_pcb *p, err_t err){
         auto c=srv->_instantiateRequest(p); // Needs to set callbacks now; to catch the request in our callback. 
         if(c){
             h4.queueFunction([=](){
+#if H4AT_DEBUG
+                            tcp_state state = -1;
+#endif
                             if (c->pcb == NULL || c->__willClose || c->_closing) {
-                                H4AT_PRINT1("%p %p",c,p, (!c->pcb) ? "PCB FREED" : (c->__willClose ? "WILL CLOSE" : "CLOSING"));
+                                H4AT_PRINT1("%p %p %s\n",c,p, (!c->pcb) ? "PCB FREED" : (c->__willClose ? "WILL CLOSE" : "CLOSING"));
                                 return;
+                            } 
+#if H4AT_DEBUG
+                            else {
+                                state = getTCPState(p, c->_isSecure);
                             }
-                            H4AT_PRINT1("NEW CONNECTION %p --> pcb=%p state=%d\n",c,p, c->pcb ? getTCPState(p, c->_isSecure):-1); // [x] getTCPState might result Undefined Behavior if pcb is freed beforehand
+#endif
+                            H4AT_PRINT1("c->pcb=%p c->_isSecure=%d\n", c->pcb, c->_isSecure);
+                            H4AT_PRINT1("NEW CONNECTION %p --> pcb=%p state=%d\n",c,p, c->pcb ? state:-1); // [x] getTCPState might result Undefined Behavior if pcb is freed beforehand
                             c->_lastSeen=millis();
                             c->onError([=](int e,int i){
                                 if(e==ERR_MEM){
@@ -116,7 +125,7 @@ void H4AsyncServer::begin() {
 #endif
 #else
 #endif
-    auto _raw_pcb = altcp_new_ip_type(&allocator, IPADDR_TYPE_ANY);
+    _raw_pcb = altcp_new_ip_type(&allocator, IPADDR_TYPE_ANY);
     if (_raw_pcb != NULL) {
         err_t err;
         altcp_arg(_raw_pcb,this);
@@ -126,6 +135,21 @@ void H4AsyncServer::begin() {
             altcp_accept(_raw_pcb, _raw_accept);
         } else H4AT_PRINT1("RAW CANT BIND\n");
     } else H4AT_PRINT1("RAW CANT GET NEW PCB\n");
+}
+
+void H4AsyncServer::reset()
+{
+#if H4AT_TLS
+    for (auto &key : _keys) {
+        if (key && key->data)
+            key->clear();
+    }
+    _secure = false;
+#endif
+    if (_raw_pcb) {
+        altcp_close(_raw_pcb);
+        _raw_pcb = NULL;
+    }
 }
 
 #if H4AT_TLS

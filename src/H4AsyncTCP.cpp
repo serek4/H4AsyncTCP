@@ -323,7 +323,6 @@ err_t _raw_recv(void *arg, struct altcp_pcb *tpcb, struct pbuf *p, err_t err){
             pbuf_copy_partial(p,cpydata,p->tot_len,0); // instead of direct memcpy that only considers the first pbuf of the possible pbufs chain.
             auto cpyflags=p->flags;
             auto cpylen=p->tot_len;
-            altcp_recved(tpcb, p->tot_len); // [ ] Move down to be called in all cases if (p) ... ?
             H4AT_PRINT2("* p=%p * FREE DATA %p %d 0x%02x bpp=%p\n",p,p->payload,p->tot_len,p->flags,rq->_bpp);
             err=ERR_OK;
             h4.queueFunction([rq,cpydata,cpylen,cpyflags]{
@@ -346,7 +345,10 @@ err_t _raw_recv(void *arg, struct altcp_pcb *tpcb, struct pbuf *p, err_t err){
             err = ERR_MEM;
         }
     }
-    if (p) pbuf_free(p); // [x] This line fixes a possible memory leak (we must pbuf_free(p) even if closes/closed).
+    if (p) {
+        altcp_recved(tpcb, p->tot_len); // [x] Move down to be called in all cases if (p) ... ?
+        pbuf_free(p);
+    }
     return err;
 }
 
@@ -407,7 +409,6 @@ H4AsyncClient::H4AsyncClient(struct altcp_pcb *newpcb): pcb(newpcb){
         altcp_recv(pcb, &_raw_recv);
         altcp_err(pcb, &_raw_error);
         altcp_sent(pcb, &_raw_sent);
-        heap_caps_check_integrity_all(true);
         _isSecure=pcb->inner_conn != NULL;
         _lastSeen=millis();
     }

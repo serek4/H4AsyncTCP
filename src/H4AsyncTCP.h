@@ -231,6 +231,7 @@ class H4AsyncClient {
 
 class H4AsyncServer {
         static    bool              _bakov;
+        altcp_pcb*                  _raw_pcb = NULL;
     protected:
             uint16_t                _port;
             bool                    _secure;
@@ -251,15 +252,7 @@ class H4AsyncServer {
 
         virtual void        begin();
                 void        onError(H4AT_FN_ERROR f){ _srvError=f; }
-        virtual void        reset(){
-#if H4AT_TLS
-            for (auto& key : _keys){
-                if (key && key->data)
-                    key->clear();
-            }
-            _secure = false;
-#endif
-        }
+        virtual void        reset();
         virtual void        route(void* c,const uint8_t* data,size_t len)=0;
 
         virtual H4AsyncClient* _instantiateRequest(struct altcp_pcb *p);
