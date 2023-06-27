@@ -44,20 +44,13 @@ err_t _raw_accept(void *arg, struct altcp_pcb *p, err_t err){
         auto c=srv->_instantiateRequest(p); // Needs to set callbacks now; to catch the request in our callback. 
         if(c){
             h4.queueFunction([=](){
-#if H4AT_DEBUG
-                            tcp_state state = -1;
-#endif
+                            LwIPCoreLocker lock;
                             if (c->pcb == NULL || c->__willClose || c->_closing) {
                                 H4AT_PRINT1("%p %p %s\n",c,p, (!c->pcb) ? "PCB FREED" : (c->__willClose ? "WILL CLOSE" : "CLOSING"));
                                 return;
                             } 
-#if H4AT_DEBUG
-                            else {
-                                state = getTCPState(p, c->_isSecure);
-                            }
-#endif
                             H4AT_PRINT1("c->pcb=%p c->_isSecure=%d\n", c->pcb, c->_isSecure);
-                            H4AT_PRINT1("NEW CONNECTION %p --> pcb=%p state=%d\n",c,p, c->pcb ? state:-1); // [x] getTCPState might result Undefined Behavior if pcb is freed beforehand
+                            H4AT_PRINT1("NEW CONNECTION %p --> pcb=%p state=%d\n",c,p, getTCPState(c->pcb, c->_isSecure)); // [x] getTCPState might result Undefined Behavior if pcb is freed beforehand
                             c->_lastSeen=millis();
                             c->onError([=](int e,int i){
                                 if(e==ERR_MEM){
@@ -98,19 +91,18 @@ void H4AsyncServer::begin() {
 #if LWIP_ALTCP
     altcp_allocator_t allocator;
 #if H4AT_TLS
-    altcp_tls_config * conf = nullptr;
-    // altcp_pcb* _raw_pcb = nullptr;
+    altcp_tls_config * _tlsConfig = nullptr;
     if (_secure) {
         H4AT_PRINT1("Setting up secured server\n");
         auto &privkey = _keys[H4AT_TLS_PRIVATE_KEY];
         auto &privkey_pass = _keys[H4AT_TLS_PRIVAKE_KEY_PASSPHRASE];
         auto &cert = _keys[H4AT_TLS_CERTIFICATE];
-        conf = altcp_tls_create_config_server_privkey_cert(privkey->data, privkey->len,
+        _tlsConfig = altcp_tls_create_config_server_privkey_cert(privkey->data, privkey->len,
                                                             privkey_pass? privkey_pass->data : NULL, privkey_pass ? privkey_pass->len : 0,
                                                             cert->data, cert->len);
-        H4AT_PRINT3("SERVER conf=%p\n", conf);
-        if (conf) {
-            allocator = altcp_allocator_t{altcp_tls_alloc, conf};
+        H4AT_PRINT3("SERVER _tlsConfig=%p\n", _tlsConfig);
+        if (_tlsConfig) {
+            allocator = altcp_allocator_t{altcp_tls_alloc, _tlsConfig};
         }
         else {
             H4AT_PRINT1("INVALID TLS CONFIGURATION\n");
@@ -120,7 +112,7 @@ void H4AsyncServer::begin() {
     }
     else {
         H4AT_PRINT1("Setting up unsecured server\n");
-        allocator = altcp_allocator_t {altcp_tcp_alloc, conf};
+        allocator = altcp_allocator_t {altcp_tcp_alloc, _tlsConfig};
     }
 #endif
 #else
@@ -133,19 +125,33 @@ void H4AsyncServer::begin() {
         if (err == ERR_OK) {
             _raw_pcb = altcp_listen(_raw_pcb);
             altcp_accept(_raw_pcb, _raw_accept);
-        } else H4AT_PRINT1("RAW CANT BIND\n");
+            return;
+        } else H4AT_PRINT1("RAW CANT BIND %d\n", err);
     } else H4AT_PRINT1("RAW CANT GET NEW PCB\n");
+    
+#if H4AT_TLS
+    // Situation when the altcp_bind fails, free the tls_config.
+    if (_raw_pcb) {
+        // lwip internals can't free it, because it only frees clients and listening server pcbs, while we've failed to set it to listen.
+        altcp_tls_free_config(static_cast<altcp_tls_config *>(_tlsConfig));
+    }
+#endif
 }
 
 void H4AsyncServer::reset()
 {
+    H4AT_PRINT1("H4AsyncServer::reset()\n");
 #if H4AT_TLS
-    for (auto &key : _keys) {
-        if (key && key->data)
-            key->clear();
+    for (auto key : _keys) {
+        if (key){
+            if (key->data)
+                key->clear();
+            delete key;
+        }
     }
     _secure = false;
 #endif
+    /* Cleanup on failure, especially important for TLS connections */
     if (_raw_pcb) {
         altcp_close(_raw_pcb);
         _raw_pcb = NULL;

@@ -37,6 +37,7 @@ SOFTWARE.
 #define H4AS_SCAVENGE_FREQ 20000
 #define H4AT_USE_TLS        1
 #define H4AT_TLS_CHECKER    1 // for isCertValid() and isPrivKeyValid()
+#define H4AT_USE_TLS_SESSION    1
 
 #if NO_SYS
 #define H4AS_QUQUE_ON_CANNOT_WRITE  false
@@ -50,5 +51,14 @@ SOFTWARE.
 #if LWIP_ALTCP && LWIP_ALTCP_TLS && LWIP_ALTCP_TLS_MBEDTLS
 #define H4AT_TLS        H4AT_USE_TLS
 #else
+#if H4AT_USE_TLS
+#pragma message "Ensure you're using the correct Arduino Core build that supports LwIP ALTCP TLS MBEDTLS"
+#endif
 #define H4AT_TLS        0
+#endif
+
+#if H4AT_TLS
+#define H4AT_TLS_SESSION H4AT_USE_TLS_SESSION
+#else
+#define H4AT_TLS_SESSION 0
 #endif

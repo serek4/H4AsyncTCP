@@ -382,6 +382,10 @@ err_t _tcp_connected(void* arg, altcp_pcb* tpcb, err_t err){
         altcp_recv(p, &_raw_recv);
         // ***************************************************
         altcp_sent(p, &_raw_sent);
+        
+#if H4AT_TLS_SESSION
+        rq->_updateSession();
+#endif
     });
     return ERR_OK;
 }
@@ -398,9 +402,117 @@ void _tcp_dns_found(const char * name, struct ip_addr * ipaddr, void * arg) {
 //
 //
 
-H4AsyncClient::H4AsyncClient(struct altcp_pcb *newpcb): pcb(newpcb){
-//    _heapLO=(_HAL_freeHeap() * H4T_HEAP_CUTOUT_PC) / 100;
-//    _heapHI=(_HAL_freeHeap() * H4T_HEAP_CUTIN_PC) / 100;
+#if H4AT_TLS_SESSION
+void H4AsyncClient::_setTLSSession()
+{
+    H4AT_PRINT2("_setTLSSession()\n");
+#if H4AT_TLS_SESSION
+    if (_session == nullptr) {
+        H4AT_PRINT1("NO Session is available internally\n");
+        return;
+    }
+    int ret=-99; // no pcb
+    if (!pcb) {
+        H4AT_PRINT1("No connection PCB!\n");
+        return;
+    }
+    ret = altcp_tls_set_session(pcb, static_cast<altcp_tls_session*>(_session));
+    H4AT_PRINT1("set session %s ret=%d\n", (ret == ERR_OK ? "SUCCEEDED" : "FAILED"), ret);
+#endif
+}
+
+bool H4AsyncClient::_initTLSSession()
+{
+    H4AT_PRINT2("initTLSSession()\n");
+    if (!pcb) {
+        H4AT_PRINT2("No connection\n");
+        return false;
+    }
+    if (!_session) {
+        H4AT_PRINT2("No session pointer\n");
+        return false;
+    }
+
+    altcp_tls_init_session(static_cast<altcp_tls_session *>(_session));    
+	return true;
+
+}
+void H4AsyncClient::_updateSession()
+{
+    H4AT_PRINT2("_updateSession()\n");
+    if (_sessionEnabled) {
+        auto old_session = _session;
+        if (_session) {
+            freeTLSSession(_session);
+        }
+        _session = getTLSSession();
+
+        if (old_session != _session && _cbSession) _cbSession(_session);
+    }
+}
+#endif
+
+void H4AsyncClient::enableTLSSession()
+{
+#if H4AT_TLS_SESSION
+    _sessionEnabled = true;
+#endif
+}
+
+void H4AsyncClient::disableTLSSession()
+{
+#if H4AT_TLS_SESSION
+    _sessionEnabled = false;
+#endif
+}
+
+void *H4AsyncClient::getTLSSession()
+{
+    H4AT_PRINT2("getTLSSession()\n");
+    if (!pcb) {
+        H4AT_PRINT2("No connection PCB\n");
+        return nullptr;
+    }
+    if (_sessionEnabled) {
+        if (!_session) {
+            _session = new altcp_tls_session;
+            _initTLSSession();
+        }
+        int ret = altcp_tls_get_session(pcb, static_cast<altcp_tls_session *>(_session));
+        if (ret != ERR_OK) {
+            H4AT_PRINT1("get session failed, ret=%d\n", ret);
+            return nullptr;
+        }
+        H4AT_PRINT1("session=%p\n", _session);
+        return static_cast<void*>(_session);
+    }
+	return nullptr;
+}
+
+void H4AsyncClient::setTLSSession(void *session)
+{
+    H4AT_PRINT2("setTLSSession(%p)\n", session);
+#if H4AT_TLS_SESSION
+    _session = session;
+#endif
+}
+void H4AsyncClient::freeTLSSession(void* session)
+{
+    H4AT_PRINT2("freeTLSSession(%p)\n", session);
+#if H4AT_TLS_SESSION
+    if (session) {
+        auto altcp_session = static_cast<altcp_tls_session *>(session);
+        altcp_tls_free_session(altcp_session);
+        delete altcp_session;
+    }
+#endif
+}
+
+
+H4AsyncClient::H4AsyncClient(struct altcp_pcb *newpcb) : pcb(newpcb)
+{
+	//    _heapLO=(_HAL_freeHeap() * H4T_HEAP_CUTOUT_PC) / 100;
+	//    _heapHI=(_HAL_freeHeap() * H4T_HEAP_CUTIN_PC) / 100;
     H4AT_PRINT1("H4AC CTOR %p PCB=%p\n",this,pcb);
     if(pcb) { // H4AsyncServer receives the pcb, already connected.
         // A server.
@@ -424,12 +536,15 @@ H4AsyncClient::~H4AsyncClient()
     H4AT_PRINT2("H4AsyncClient DTOR %p pcb=%p _bpp=%p\n", this, pcb, _bpp); 
 #if H4AT_TLS
     for (auto& key : _keys)
+    {
+        H4AT_PRINT4("key %p data %p\n", key, key ? key->data : nullptr);
         if (key) {
             if (key->data)
                 key->clear();
             delete key;
             // key=nullptr; // unnecessary
         }
+    }
 #endif
 
 }
@@ -554,7 +669,7 @@ void H4AsyncClient::_connect() {
 #if H4AT_TLS
     H4AT_PRINT1("_URL.secure=%d\ttls_mode=%d\n", _URL.secure, _tls_mode);
     if (_URL.secure && _tls_mode != H4AT_TLS_NONE){
-        H4AT_PRINT1("Setting the secure config PCB=%p\n", pcb);
+        H4AT_PRINT1("Setting the secure config PCB=%p\n", pcb); // ENSURE YOU'VE CLOSED THE PREVIOUS CONNECTION by rq->close() if didn't receive onConnectFail/onDisconnect() callbacks.
         // secure.
         altcp_tls_config *_tlsConfig;
         auto &ca_cert = _keys[H4AT_TLS_CA_CERTIFICATE];
@@ -607,6 +722,15 @@ void H4AsyncClient::_connect() {
     }
     altcp_arg(pcb, this);
     altcp_err(pcb, &_raw_error);
+#if H4AT_TLS_SESSION
+    H4AT_PRINT1("_sessionEnabled=%d _session %p\n", _sessionEnabled, _session);
+    if (_sessionEnabled) {
+        if (_session) { // There's a session has been set by the user, inject it.
+            // The user must assure any previous session gets freed, else it will cause memory leak.
+            _setTLSSession();
+        }
+    }
+#endif
     _notify(altcp_connect(pcb, &_URL.addr, _URL.port,(altcp_connected_fn)&_tcp_connected));
     heap_caps_check_integrity_all(true);
 }
@@ -683,7 +807,7 @@ void H4AsyncClient::TX(const uint8_t* data,size_t len,bool copy, uint8_t* copy_d
     heap_caps_check_integrity_all(true);
     LwIPCoreLocker lock;
     if(!connected()){
-        H4AT_PRINT1("%p TX called %s!\n", this, _closing ? "during close" : __willClose ? "and it will close" : "before connect");
+        H4AT_PRINT1("%p TX called %s!\n", this, _closing ? "during close" : __willClose ? "and it will close" : "before connect or after cnx error");
         _notify(0,(_closing || __willClose)?H4AT_CLOSING:H4AT_UNCONNECTED);
     }
     else{

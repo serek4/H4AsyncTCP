@@ -124,6 +124,7 @@ class H4AsyncClient;
 using H4AT_NVP_MAP      =std::unordered_map<std::string,std::string>;
 using H4AT_FN_ERROR     =std::function<bool(int,int)>;
 using H4AT_FN_RXDATA    =std::function<void(const uint8_t* data, size_t len)>;
+using H4AT_FN_PTR       =std::function<void(void*)>;
 class H4AsyncClient {
         static  void                __scavenge();
         static  bool                _scavenging;
@@ -132,6 +133,7 @@ class H4AsyncClient {
                 void                _willClose() {__willClose = true;}
         friend  err_t   _raw_recv(void *arg, struct altcp_pcb *tpcb, struct pbuf *p, err_t err);
         friend  err_t   _raw_accept(void *arg, struct altcp_pcb *p, err_t err);
+        friend  err_t   _tcp_connected(void* arg, altcp_pcb* tpcb, err_t err);
 
                 bool                _isServer=false;
                 bool                _isSecure=false;
@@ -142,6 +144,14 @@ class H4AsyncClient {
                     H4AT_TLS_ONE_WAY,
                     H4AT_TLS_TWO_WAY
                 } _tls_mode = H4AT_TLS_NONE;
+#endif
+
+#if H4AT_TLS_SESSION
+                void*               _session = NULL; // Move to private section
+                bool                _sessionEnabled;
+                void                _setTLSSession(); // Commits it into the connection.
+                bool                _initTLSSession();
+                void                _updateSession(); // Callable on _tcp_connected
 #endif
     protected:
                 H4AT_FN_RXDATA      _rxfn=[](const uint8_t* data,size_t len){ Serial.printf("RXFN SAFETY\n"); dumphex(data,len); };
@@ -168,6 +178,9 @@ class H4AsyncClient {
                 H4_FN_VOID          _cbDisconnect;
                 H4_FN_VOID          _cbConnectFail;
                 H4AT_FN_ERROR       _cbError=[](int e,int i){ return true; }; // return false to avoid auto-shutdown
+#if H4AT_TLS_SESSION
+                H4AT_FN_PTR         _cbSession;
+#endif
                 bool                _closing=false;
         static  H4_INT_MAP          _errorNames;
         //   size_t              _heapLO;
@@ -177,6 +190,16 @@ class H4AsyncClient {
                 bool                _nagle=false;
                 struct altcp_pcb    *pcb;
                 size_t              _stored=0;
+
+                void                enableTLSSession();
+                void                disableTLSSession();
+                void*               getTLSSession(); // user call
+                /*! setTLSSession 
+                    user call upon construction, sets the internal pointer.
+                    if session is enabled by the user, he must set any previous sessions to prevent memory leak.
+                */
+                void                setTLSSession(void* session); // 
+                void                freeTLSSession(void* session); // user calls it if he wants to discard a session, because of timeout or different server communication
 
         H4AsyncClient(altcp_pcb* p=0);
         virtual ~H4AsyncClient();
@@ -201,6 +224,11 @@ class H4AsyncClient {
                 void                onConnectFail(H4_FN_VOID cb){ _cbConnectFail=cb; }
                 void                onError(H4AT_FN_ERROR cb){ _cbError=cb; }
                 void                onRX(H4AT_FN_RXDATA f){ _rxfn=f; }
+#if H4AT_TLS_SESSION
+                void                onSession(H4AT_FN_PTR f){ _cbSession = f; }
+#else
+                void                onSession(H4AT_FN_PTR f){ }
+#endif
                 uint32_t            remoteAddress();
                 IPAddress           remoteIP();
                 std::string         remoteIPstring();
