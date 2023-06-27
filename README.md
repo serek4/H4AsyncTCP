@@ -47,6 +47,9 @@ For ESP32, currently it requires a custom [arduino-esp32 build](https://github.c
 ### Server:
 Same as described in the previous section, but `H4AsyncServer::secureTLS` should be called on just after boot, anytime before `H4AsyncServer::begin()` is called, and only once.
 
+## Version 0.0.13
+Adds TLS Session support.
+Fixes several memory leaks.
 
 ## Version 0.0.12
 Major and deep fixs of TCP usage, including crashes caused by memory corruption and bad timing.  

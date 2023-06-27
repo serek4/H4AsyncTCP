@@ -43,6 +43,10 @@ reset	KEYWORD2
 route	KEYWORD2
 TX	KEYWORD2
 secureTLS KEYWORD2
+onSession KEYWORD2
+setTLSSession KEYWORD2
+getTLSSession KEYWORD2
+freeTLSSession KEYWORD2
 
 #######################################
 # Constants (LITERAL1)
