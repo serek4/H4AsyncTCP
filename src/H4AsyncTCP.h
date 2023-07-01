@@ -134,7 +134,7 @@ class H4AsyncClient {
         friend  err_t   _raw_recv(void *arg, struct altcp_pcb *tpcb, struct pbuf *p, err_t err);
         friend  err_t   _raw_accept(void *arg, struct altcp_pcb *p, err_t err);
         friend  err_t   _tcp_connected(void* arg, altcp_pcb* tpcb, err_t err);
-
+        friend  void    _raw_error(void *arg, err_t err);
                 bool                _isServer=false;
                 bool                _isSecure=false;
 #if H4AT_TLS
@@ -152,6 +152,7 @@ class H4AsyncClient {
                 void                _setTLSSession(); // Commits it into the connection.
                 bool                _initTLSSession();
                 void                _updateSession(); // Callable on _tcp_connected
+                void                _removeSession();
 #endif
     protected:
                 H4AT_FN_RXDATA      _rxfn=[](const uint8_t* data,size_t len){ Serial.printf("RXFN SAFETY\n"); dumphex(data,len); };

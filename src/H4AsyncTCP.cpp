@@ -295,6 +295,7 @@ void _raw_error(void *arg, err_t err){
     H4AT_PRINT1("_raw_error c=%p e=%d\n",arg,err);
     auto c=reinterpret_cast<H4AsyncClient*>(arg);
     c->pcb=NULL;
+    c->_removeSession();
     h4.queueFunction([c,err](){
         H4AT_PRINT1("CONNECTION %p *ERROR* pcb=%p err=%d\n",c,c->pcb, err);
         auto it=H4AsyncClient::openConnections.find(c);
@@ -448,6 +449,16 @@ void H4AsyncClient::_updateSession()
         _session = getTLSSession();
 
         if (old_session != _session && _cbSession) _cbSession(_session);
+    }
+}
+void H4AsyncClient::_removeSession()
+{
+    if (_sessionEnabled) {
+        if (_session) {
+            freeTLSSession(_session);
+            _session = nullptr;
+            if (_cbSession) _cbSession(_session);
+        }
     }
 }
 #endif
