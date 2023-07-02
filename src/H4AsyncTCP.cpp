@@ -295,7 +295,9 @@ void _raw_error(void *arg, err_t err){
     H4AT_PRINT1("_raw_error c=%p e=%d\n",arg,err);
     auto c=reinterpret_cast<H4AsyncClient*>(arg);
     c->pcb=NULL;
+#if H4AT_TLS_SESSION
     c->_removeSession();
+#endif
     h4.queueFunction([c,err](){
         H4AT_PRINT1("CONNECTION %p *ERROR* pcb=%p err=%d\n",c,c->pcb, err);
         auto it=H4AsyncClient::openConnections.find(c);
@@ -441,7 +443,7 @@ bool H4AsyncClient::_initTLSSession()
 void H4AsyncClient::_updateSession()
 {
     H4AT_PRINT2("_updateSession()\n");
-    if (_sessionEnabled) {
+    if (_isSecure && _sessionEnabled) {
         auto old_session = _session;
         if (_session) {
             freeTLSSession(_session);
@@ -480,11 +482,12 @@ void H4AsyncClient::disableTLSSession()
 void *H4AsyncClient::getTLSSession()
 {
     H4AT_PRINT2("getTLSSession()\n");
+#if H4AT_TLS_SESSION
     if (!pcb) {
         H4AT_PRINT2("No connection PCB\n");
         return nullptr;
     }
-    if (_sessionEnabled) {
+    if (_isSecure && _sessionEnabled) {
         if (!_session) {
             _session = new altcp_tls_session;
             _initTLSSession();
@@ -497,6 +500,7 @@ void *H4AsyncClient::getTLSSession()
         H4AT_PRINT1("session=%p\n", _session);
         return static_cast<void*>(_session);
     }
+#endif
 	return nullptr;
 }
 
@@ -532,8 +536,9 @@ H4AsyncClient::H4AsyncClient(struct altcp_pcb *newpcb) : pcb(newpcb)
         altcp_recv(pcb, &_raw_recv);
         altcp_err(pcb, &_raw_error);
         altcp_sent(pcb, &_raw_sent);
+#if H4AT_TLS
         _isSecure=pcb->inner_conn != NULL;
-        _lastSeen=millis();
+#endif        _lastSeen=millis();
     }
     else {
         // A client.
