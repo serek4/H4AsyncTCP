@@ -15,10 +15,17 @@ For ESP32, currently it requires a custom [arduino-esp32 build](https://github.c
 - Setup The custom arduino core.
   - For PlatformIO:
 ```ini
-  platform = espressif32@6.3.1
-  board = esp32doit-devkit-v1
-  platform_packages =
+platform = espressif32@6.3.1
+board = esp32doit-devkit-v1
+platform_packages =
       platformio/framework-arduinoespressif32 @ https://github.com/HamzaHajeir/arduino-esp32#lwip-tls
+```
+- Ensure proper LWIP compile flags are defined 1:
+  - For PlatformIO
+```ini
+build_flags = -DLWIP_ALTCP=1
+  -DLWIP_ALTCP_TLS=1
+  -DLWIP_ALTCP_TLS_MBEDTLS=1
 ```
 - Ensure `H4AT_USE_TLS` is defined `1` in the configuration file.
 - For clients, call `secureTLS` providing all needed information before calling `connect`. 
