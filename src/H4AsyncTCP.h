@@ -84,7 +84,7 @@ enum {
     template<int I, typename... Args>
     void H4AT_PRINT(const char* fmt, Args... args) {
         #ifdef ARDUINO_ARCH_ESP32
-        if (H4AT_DEBUG >= I) H4AT_PRINTF(std::string(std::string("H4AT:%d: H=%u M=%u B=%u S=%u ")+fmt).c_str(),I,_HAL_freeHeap(),_HAL_maxHeapBlock(), _HAL_maxHeapBlock8Bit(),uxTaskGetStackHighWaterMark(NULL),args...);
+        if (H4AT_DEBUG >= I) H4AT_PRINTF(std::string(std::string("H4AT:%d: H=%u M=%u S=%u ")+fmt).c_str(),I,_HAL_freeHeap(),_HAL_maxHeapBlock(),uxTaskGetStackHighWaterMark(NULL),args...);
         #else
         if (H4AT_DEBUG >= I) H4AT_PRINTF(std::string(std::string("H4AT:%d: H=%u M=%u ")+fmt).c_str(),I,_HAL_freeHeap(),_HAL_maxHeapBlock(),args...);
         #endif

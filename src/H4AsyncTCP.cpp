@@ -455,6 +455,7 @@ void H4AsyncClient::_updateSession()
 }
 void H4AsyncClient::_removeSession()
 {
+    H4AT_PRINT2("_removeSession() en=%d _session=%p\n", _sessionEnabled, _session);
     if (_sessionEnabled) {
         if (_session) {
             freeTLSSession(_session);
@@ -497,7 +498,7 @@ void *H4AsyncClient::getTLSSession()
             H4AT_PRINT1("get session failed, ret=%d\n", ret);
             return nullptr;
         }
-        H4AT_PRINT1("session=%p\n", _session);
+        H4AT_PRINT2("_session=%p\n", _session);
         return static_cast<void*>(_session);
     }
 #endif
