@@ -225,11 +225,11 @@ void H4AsyncClient::_notify(int e,int i) {
 
 void H4AsyncClient::_shutdown() {
     H4AT_PRINT1("_shutdown %p %d\n",this, _closing);
+    LwIPCoreLocker lock;
     if (_closing) {
         H4AT_PRINT1("Already closing/closed\n");
         return;
     }
-    LwIPCoreLocker lock;
     _closing=true;
     _lastSeen=0;
     err_t err = ERR_OK;
@@ -244,8 +244,7 @@ void H4AsyncClient::_shutdown() {
             altcp_recv(pcb, NULL);
             altcp_err(pcb, NULL);
             H4AT_PRINT1("*********** pre closing\n");
-            if (state)
-                err=altcp_close(pcb);
+            err=altcp_close(pcb);
         }
             else H4AT_PRINT1("*********** already closed?\n");
 
@@ -411,16 +410,16 @@ void H4AsyncClient::_setTLSSession()
     H4AT_PRINT2("_setTLSSession()\n");
 #if H4AT_TLS_SESSION
     if (_session == nullptr) {
-        H4AT_PRINT1("NO Session is available internally\n");
+        H4AT_PRINT2("NO Session is available internally\n");
         return;
     }
     int ret=-99; // no pcb
     if (!pcb) {
-        H4AT_PRINT1("No connection PCB!\n");
+        H4AT_PRINT2("No connection PCB!\n");
         return;
     }
     ret = altcp_tls_set_session(pcb, static_cast<altcp_tls_session*>(_session));
-    H4AT_PRINT1("set session %s ret=%d\n", (ret == ERR_OK ? "SUCCEEDED" : "FAILED"), ret);
+    H4AT_PRINT2("set session %s ret=%d\n", (ret == ERR_OK ? "SUCCEEDED" : "FAILED"), ret);
 #endif
 }
 
@@ -445,9 +444,6 @@ void H4AsyncClient::_updateSession()
     H4AT_PRINT2("_updateSession()\n");
     if (_isSecure && _sessionEnabled) {
         auto old_session = _session;
-        if (_session) {
-            freeTLSSession(_session);
-        }
         _session = getTLSSession();
 
         if (old_session != _session && _cbSession) _cbSession(_session);
@@ -554,7 +550,6 @@ H4AsyncClient::~H4AsyncClient()
 #if H4AT_TLS
     for (auto& key : _keys)
     {
-        H4AT_PRINT4("key %p data %p\n", key, key ? key->data : nullptr);
         if (key) {
             if (key->data)
                 key->clear();

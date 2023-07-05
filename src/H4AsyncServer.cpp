@@ -131,9 +131,10 @@ void H4AsyncServer::begin() {
     
 #if H4AT_TLS
     // Situation when the altcp_bind fails, free the tls_config.
-    if (_raw_pcb) {
+    if (_raw_pcb && _tlsConfig) {
         // lwip internals can't free it, because it only frees clients and listening server pcbs, while we've failed to set it to listen.
         altcp_tls_free_config(static_cast<altcp_tls_config *>(_tlsConfig));
+        _tlsConfig = nullptr;
     }
 #endif
 }
