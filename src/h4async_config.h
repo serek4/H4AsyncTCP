@@ -24,7 +24,7 @@ SOFTWARE.
 */
 #pragma once
 #include <lwip/opt.h>
-#define H4AT_VERSION "0.0.13"
+#define H4AT_VERSION "0.0.14"
 /*
     Debug levels: 
     0 - No debug messages, no debug functions

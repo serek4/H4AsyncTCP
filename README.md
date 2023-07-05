@@ -54,6 +54,9 @@ build_flags = -DLWIP_ALTCP=1
 ### Server:
 Same as described in the previous section, but `H4AsyncServer::secureTLS` should be called on just after boot, anytime before `H4AsyncServer::begin()` is called, and only once.
 
+## Version 0.0.14
+Important critical fixes in managing TLS session, config.
+Fixes delayed lock in shutdown().
 ## Version 0.0.13
 Adds TLS Session support.
 Fixes several memory leaks.
