@@ -329,8 +329,12 @@ err_t _raw_recv(void *arg, struct altcp_pcb *tpcb, struct pbuf *p, err_t err){
             err=ERR_OK;
             h4.queueFunction([rq,cpydata,cpylen,cpyflags]{
                 H4AT_PRINT2("_raw_recv %p data=%p L=%d f=0x%02x \n",rq,cpydata,cpylen,cpyflags);
-                if (!rq->connected()) {
-                    H4AT_PRINT2("Prevent processing of closing connection __wc[%d] _clg[%d]\n", rq->__willClose, rq->_closing);
+                // if (!rq->connected()) {
+                //     H4AT_PRINT2("Prevent processing of closing connection __wc[%d] _clg[%d]\n", rq->__willClose, rq->_closing);
+                //     return;
+                // }
+                if (rq->_closing) {
+                    H4AT_PRINT2("Prevent processing of closing connection\n");
                     return;
                 }
                 rq->_lastSeen=millis();
@@ -535,7 +539,8 @@ H4AsyncClient::H4AsyncClient(struct altcp_pcb *newpcb) : pcb(newpcb)
         altcp_sent(pcb, &_raw_sent);
 #if H4AT_TLS
         _isSecure=pcb->inner_conn != NULL;
-#endif        _lastSeen=millis();
+#endif    
+        _lastSeen=millis();
     }
     else {
         // A client.
@@ -586,7 +591,7 @@ void  H4AsyncClient::_parseURL(const std::string& url){
         H4AT_PRINT4("query %s\n", _URL.query.data());
 
         std::vector<std::string> vs3=split(vs2[0],"/");
-        _URL.path=std::string("/")+((vs3.size()>1) ? join(std::vector<std::string>(++vs3.begin(),vs3.end()),"/")+"/":"");
+        _URL.path=std::string("/")+((vs3.size()>1) ? join(std::vector<std::string>(++vs3.begin(),vs3.end()),"/"):"");
         H4AT_PRINT4("path %s\n", _URL.path.data());
 
         std::vector<std::string> vs4=split(vs3[0],":");
@@ -675,6 +680,7 @@ void H4AsyncClient::__scavenge()
 
 void H4AsyncClient::_connect() {
     H4AT_PRINT2("_connect p=%p state=%d\n",pcb, pcb ? getTCPState(pcb, _isSecure) : -1);
+    H4AT_PRINT4("ip %s port %d\n", ipaddr_ntoa(&_URL.addr), _URL.port);
     LwIPCoreLocker lock;
 #if LWIP_ALTCP
     altcp_allocator_t allocator {altcp_tcp_alloc, nullptr};
@@ -691,7 +697,7 @@ void H4AsyncClient::_connect() {
                 // if (ca_cert && ca_cert->data) // [ ] Shouldn't be needed.
                 // dumphex(ca_cert->data, ca_cert->len);s
                 _tlsConfig = altcp_tls_create_config_client(ca_cert->data, ca_cert->len);
-                H4AT_PRINT2("ONE WAY TLS _tlsConfig=%p PCB=%p\n", _tlsConfig, pcb);
+                H4AT_PRINT2("ONE WAY TLS _tlsConfig=%p\n", _tlsConfig);
                 break;
 
             case H4AT_TLS_TWO_WAY:
@@ -759,6 +765,7 @@ void H4AsyncClient::connect(const std::string& host,uint16_t port){
         LwIPCoreLocker lock;
         err_t err = dns_gethostbyname(host.data(), &_URL.addr, (dns_found_callback)&_tcp_dns_found, this);
         if(err) _notify(H4AT_ERR_DNS_FAIL,err);
+        else _connect();
     }
 }
 
@@ -894,6 +901,7 @@ void H4AsyncClient::TX(const uint8_t* data,size_t len,bool copy, uint8_t* copy_d
 void H4AsyncClient::secureTLS(const u8_t * ca, size_t ca_len, const u8_t * privkey, size_t privkey_len, const u8_t * privkey_pass, size_t privkey_pass_len, const u8_t * cert, size_t cert_len)
 {
     if (!ca || ca_len==0) return;
+    H4AT_PRINT4("secureTLS(%p, %d, %p, %d, %p, %d, %p, %d)\n", ca, ca_len, privkey, privkey_len, privkey_pass, privkey_pass_len, cert, cert_len);
 
     _keys[H4AT_TLS_CA_CERTIFICATE] = new mbx{const_cast<u8_t*>(ca), ca_len};
 

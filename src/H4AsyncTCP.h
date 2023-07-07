@@ -148,7 +148,7 @@ class H4AsyncClient {
 
 #if H4AT_TLS_SESSION
                 void*               _session = NULL; // Move to private section
-                bool                _sessionEnabled;
+                bool                _sessionEnabled = false;
                 void                _setTLSSession(); // Commits it into the connection.
                 bool                _initTLSSession();
                 void                _updateSession(); // Callable on _tcp_connected
