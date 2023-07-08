@@ -408,6 +408,23 @@ void _tcp_dns_found(const char * name, struct ip_addr * ipaddr, void * arg) {
 //
 //
 
+#if H4AT_TLS
+void H4AsyncClient::_addSNI()
+{
+    H4AT_PRINT2("_addSNI\n");
+    if (_URL.host.length() && pcb) {
+        auto tls_context = static_cast<mbedtls_ssl_context*>(altcp_tls_context(pcb)); 
+        if (!tls_context) {
+            H4AT_PRINT2("tls_context NULL!\n");
+            return;
+        }
+        int ret;
+        if (ret=mbedtls_ssl_set_hostname(tls_context, _URL.host.c_str())) {
+            H4AT_PRINT2("FAILED %d [%X]\n", ret, ret);
+        }
+    }
+}
+#endif
 #if H4AT_TLS_SESSION
 void H4AsyncClient::_setTLSSession()
 {
@@ -749,6 +766,9 @@ void H4AsyncClient::_connect() {
         }
     }
 #endif
+#if H4AT_TLS
+    _addSNI();
+#endif
     _notify(altcp_connect(pcb, &_URL.addr, _URL.port,(altcp_connected_fn)&_tcp_connected));
     heap_caps_check_integrity_all(true);
 }
@@ -833,7 +853,7 @@ void H4AsyncClient::TX(const uint8_t* data,size_t len,bool copy, uint8_t* copy_d
         uint8_t flags;
         size_t  sent=0;
         size_t  left=len;
-
+        // dumphex(data,len);
         while(left && !_closing){
             size_t available=altcp_sndbuf(pcb);
             auto qlen = altcp_sndqueuelen(pcb);

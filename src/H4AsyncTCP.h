@@ -144,6 +144,7 @@ class H4AsyncClient {
                     H4AT_TLS_ONE_WAY,
                     H4AT_TLS_TWO_WAY
                 } _tls_mode = H4AT_TLS_NONE;
+                void                _addSNI(); // Add Server Name Indication to the TLS Context
 #endif
 
 #if H4AT_TLS_SESSION
