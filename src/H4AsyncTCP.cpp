@@ -764,7 +764,7 @@ void H4AsyncClient::_connect() {
     altcp_err(pcb, &_raw_error);
 #if H4AT_TLS_SESSION
     H4AT_PRINT1("_sessionEnabled=%d _session %p\n", _sessionEnabled, _session);
-    if (_sessionEnabled) {
+    if (_isSecure && _sessionEnabled) {
         if (_session) { // There's a session has been set by the user, inject it.
             // The user must assure any previous session gets freed, else it will cause memory leak.
             _setTLSSession();
@@ -772,7 +772,8 @@ void H4AsyncClient::_connect() {
     }
 #endif
 #if H4AT_TLS
-    _addSNI();
+    if (_isSecure)
+        _addSNI();
 #endif
     _notify(altcp_connect(pcb, &_URL.addr, _URL.port,(altcp_connected_fn)&_tcp_connected));
     _scavenge();
