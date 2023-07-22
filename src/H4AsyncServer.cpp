@@ -42,14 +42,15 @@ err_t _raw_accept(void *arg, struct altcp_pcb *p, err_t err){
             return ERR_MEM;
         }
         auto c=srv->_instantiateRequest(p); // Needs to set callbacks now; to catch the request in our callback. 
+        c->_state = H4AT_CONN_CONNECTED;
         if(c){
             h4.queueFunction([=](){
                             LwIPCoreLocker lock;
-                            if (c->pcb == NULL || c->__willClose || c->_closing) {
-                                H4AT_PRINT1("%p %p %s\n",c,p, (!c->pcb) ? "PCB FREED" : (c->__willClose ? "WILL CLOSE" : "CLOSING"));
+                            if (c->pcb == NULL || c->_state > H4AT_CONN_CONNECTED) {
+                                H4AT_PRINT1("%p %p %s\n",c,p, (!c->pcb) ? "PCB FREED" : (c->_state == H4AT_CONN_WILLCLOSE ? "WILL CLOSE" : "CLOSING"));
                                 return;
                             } 
-                            H4AT_PRINT1("c->pcb=%p c->_isSecure=%d\n", c->pcb, c->_isSecure);
+                            H4AT_PRINT2("c->pcb=%p c->_isSecure=%d\n", c->pcb, c->_isSecure);
                             H4AT_PRINT1("NEW CONNECTION %p --> pcb=%p state=%d\n",c,p, getTCPState(c->pcb, c->_isSecure)); // [x] getTCPState might result Undefined Behavior if pcb is freed beforehand
                             c->_lastSeen=millis();
                             c->onError([=](int e,int i){
@@ -119,9 +120,9 @@ void H4AsyncServer::begin() {
 #endif
     _raw_pcb = altcp_new_ip_type(&allocator, IPADDR_TYPE_ANY);
     if (_raw_pcb != NULL) {
-        err_t err;
+        H4AsyncClient::_scavenge();
         altcp_arg(_raw_pcb,this);
-        err = altcp_bind(_raw_pcb, IP_ADDR_ANY, _port);
+        err_t err = altcp_bind(_raw_pcb, IP_ADDR_ANY, _port);
         if (err == ERR_OK) {
             _raw_pcb = altcp_listen(_raw_pcb);
             altcp_accept(_raw_pcb, _raw_accept);

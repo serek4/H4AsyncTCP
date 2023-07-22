@@ -121,6 +121,13 @@ static const char * const tcp_state_str[] = {
   "LAST_ACK",
   "TIME_WAIT"
 };
+static const char * const h4at_state_str[] = {
+  "UNCONNECTED",
+  "CONNECTED",
+  "WILL_CLOSE",
+  "ERROR",
+  "CLOSING",
+};
 #endif
 
 enum tcp_state getTCPState(struct altcp_pcb *conn, bool tls) {
@@ -224,29 +231,26 @@ void H4AsyncClient::_notify(int e,int i) {
 }
 
 void H4AsyncClient::_shutdown() {
-    H4AT_PRINT1("_shutdown %p %d\n",this, _closing);
+    H4AT_PRINT1("_shutdown %p %d\n",this, _state);
     LwIPCoreLocker lock;
-    if (_closing) {
+    if (_state == H4AT_CONN_CLOSING) {
         H4AT_PRINT1("Already closing/closed\n");
         return;
     }
-    _closing=true;
+    _state = H4AT_CONN_CLOSING;
     _lastSeen=0;
     err_t err = ERR_OK;
     if(pcb){
         auto state = getTCPState(pcb, _isSecure);
         
         H4AT_PRINT1("RAW 1 PCB=%p STATE=%d \"%s\"\n",pcb,state,(state >= CLOSED && state <=TIME_WAIT)? tcp_state_str[state]:"???");
-        if (state >= CLOSED) { // Valid PCB...
-            altcp_arg(pcb, NULL);
-            //***************************************************
-            altcp_sent(pcb, NULL);
-            altcp_recv(pcb, NULL);
-            altcp_err(pcb, NULL);
-            H4AT_PRINT1("*********** pre closing\n");
-            err=altcp_close(pcb);
-        }
-            else H4AT_PRINT1("*********** already closed?\n");
+        altcp_arg(pcb, NULL);
+        //***************************************************
+        altcp_sent(pcb, NULL);
+        altcp_recv(pcb, NULL);
+        altcp_err(pcb, NULL);
+        H4AT_PRINT3("*********** pre closing\n");
+        err=altcp_close(pcb);
 
         if (err) {
             H4AT_PRINT1("Error closing %d \"%s\"\n", err, _errorNames[err].c_str());
@@ -261,7 +265,7 @@ void H4AsyncClient::_shutdown() {
                                     });
             }
         }
-        H4AT_PRINT2("*********** NULL IT\n");
+        H4AT_PRINT4("*********** NULL IT\n");
         pcb=NULL; // == eff = reset;
     }
     else {
@@ -273,7 +277,7 @@ void H4AsyncClient::_shutdown() {
         if (_cbDisconnect) _cbDisconnect();
         else
             H4AT_PRINT2("NO DISCONNECT HANDLER\n");
-        h4.queueFunction([](){ checkPCBs("SHUTDOWN", -1);});
+        checkPCBs("SHUTDOWN", -1);
     }
     else if (unconnectedClients.count(this)){ // The connection (as a client) was never established
         if (_cbConnectFail) _cbConnectFail();
@@ -286,14 +290,14 @@ void H4AsyncClient::_shutdown() {
                          { H4AsyncClient::__scavenge(); });
     }
     _clearDanglingInput(); // [x] Should be cleared at all cases (when pcb==null)
-    __willClose=false;
-    return _notify(err);
+    return _notify(err == ERR_CLSD ? ERR_OK : err);
 }
 
 void _raw_error(void *arg, err_t err){
     H4AT_PRINT1("_raw_error c=%p e=%d\n",arg,err);
     auto c=reinterpret_cast<H4AsyncClient*>(arg);
     c->pcb=NULL;
+    c->_state=H4AT_CONN_ERROR;
 #if H4AT_TLS_SESSION
     c->_removeSession();
 #endif
@@ -309,17 +313,13 @@ void _raw_error(void *arg, err_t err){
 err_t _raw_recv(void *arg, struct altcp_pcb *tpcb, struct pbuf *p, err_t err){
     H4AT_PRINT1("_raw_recv %p tpcb=%p p=%p err=%d data=%p tot_len=%d\n",arg,tpcb,p, err, p ? p->payload:0,p ? p->tot_len:0);
     auto rq=reinterpret_cast<H4AsyncClient*>(arg);
-    H4AT_PRINT3("_closing=%d _wc=%d\n", rq->_closing, rq->__willClose);
-    if (((p == NULL || err!=ERR_OK) && rq->pcb) || rq->_closing) {
-        H4AT_PRINT1("Calling _willClose()\n");
-        rq->_willClose();
+    H4AT_PRINT2("_state=%d \"%s\"\n", rq->_state, h4at_state_str[rq->_state]);
+    if (((p == NULL || err!=ERR_OK) && rq->pcb) || rq->_state == H4AT_CONN_CLOSING) {
+        H4AT_PRINT1("Will Close!\n");
+        if (rq->_state != H4AT_CONN_CLOSING)
+        rq->_state = H4AT_CONN_WILLCLOSE;
         h4.queueFunction([=](){ rq->_notify(ERR_CLSD, err); });// * warn ...hanging data when closing?
-    } else if (rq->__willClose) {
-        H4AT_PRINT2("Will close already\n");
-    } else if (!rq->pcb) {
-        H4AT_PRINT2("INVALID RQ->PCB\n");
-    }
-    else {
+    } else {
         auto cpydata=static_cast<uint8_t*>(malloc(p->tot_len));
         if(cpydata){
             pbuf_copy_partial(p,cpydata,p->tot_len,0); // instead of direct memcpy that only considers the first pbuf of the possible pbufs chain.
@@ -329,14 +329,12 @@ err_t _raw_recv(void *arg, struct altcp_pcb *tpcb, struct pbuf *p, err_t err){
             err=ERR_OK;
             h4.queueFunction([rq,cpydata,cpylen,cpyflags]{
                 H4AT_PRINT2("_raw_recv %p data=%p L=%d f=0x%02x \n",rq,cpydata,cpylen,cpyflags);
-                // if (!rq->connected()) {
-                //     H4AT_PRINT2("Prevent processing of closing connection __wc[%d] _clg[%d]\n", rq->__willClose, rq->_closing);
-                //     return;
-                // }
-                if (rq->_closing) {
+                LwIPCoreLocker lock; // To ensure no data race between two threads, .
+                if (rq->_state == H4AT_CONN_CLOSING || rq->_state == H4AT_CONN_ERROR) {
                     H4AT_PRINT2("Prevent processing of closing connection\n");
                     return;
                 }
+                if (rq->_state == H4AT_CONN_WILLCLOSE) H4AT_PRINT1("WATCHOUT THE CONNECTION UNDER CLOSING!\n");
                 rq->_lastSeen=millis();
                 rq->_handleFragment((const uint8_t*) cpydata,cpylen,cpyflags);
             },[cpydata]{
@@ -367,10 +365,11 @@ err_t _raw_sent(void* arg,struct altcp_pcb *tpcb, u16_t len){
 
 err_t _tcp_connected(void* arg, altcp_pcb* tpcb, err_t err){
     H4AT_PRINT1("_tcp_connected %p %p e=%d\n",arg,tpcb,err);
-    h4.queueFunction([arg,tpcb,err](){
-        H4AT_PRINT1("QF tcp_connected %p %p e=%d\n",arg,tpcb,err);
+    auto rq=reinterpret_cast<H4AsyncClient*>(arg);
+    rq->_state = H4AT_CONN_CONNECTED;
+    h4.queueFunction([rq,tpcb,err](){
+        H4AT_PRINT2("QF tcp_connected %p %p e=%d\n",rq,tpcb,err);
         LwIPCoreLocker LOCK;
-        auto rq=reinterpret_cast<H4AsyncClient*>(arg);
         auto p=reinterpret_cast<altcp_pcb*>(tpcb);
 #if H4AT_DEBUG
         if (!rq->connected()){
@@ -644,7 +643,7 @@ uint8_t* H4AsyncClient::_addFragment(const uint8_t* data,u16_t len){
 
 void H4AsyncClient::_handleFragment(const uint8_t* data,u16_t len,u8_t flags) {
     H4AT_PRINT1("%p _handleFragment %p %d f=0x%02x bpp=%p _s=%d\n",this,data,len,flags,_bpp,_stored);
-    if(!_closing){
+    if(_state != H4AT_CONN_CLOSING){
         if(flags & PBUF_FLAG_PUSH){
             if(!_stored) _rxfn(data,len);
             else {
@@ -658,13 +657,19 @@ void H4AsyncClient::_handleFragment(const uint8_t* data,u16_t len,u8_t flags) {
 }
 
 void H4AsyncClient::_scavenge(){
-    h4.every(
-        H4AS_SCAVENGE_FREQ,
-        []{H4AsyncClient::__scavenge();},
-        nullptr,
-        H4AT_SCAVENGER_ID,
-        true
-    );
+    static bool started=false;
+    if (!started)
+    {
+        Serial.printf("Starting the SCAVENGER\n");
+        h4.every(
+            H4AS_SCAVENGE_FREQ,
+            []
+            { H4AsyncClient::__scavenge(); },
+            nullptr,
+            H4AT_SCAVENGER_ID,
+            true);
+        started = true;
+    }
 }
 
 void H4AsyncClient::__scavenge()
@@ -674,13 +679,13 @@ void H4AsyncClient::__scavenge()
     std::vector<H4AsyncClient*> tbd;
     // Nullified PCBs are not really needed to check, as _shutdown() will reset _lastSeen.
     for(auto &oc:openConnections){
-        H4AT_PRINT1("T=%u OC %p ls=%u age(s)=%u SCAV=%u PCB=%p %s\n",millis(),oc,oc->_lastSeen,(millis() - oc->_lastSeen) / 1000,H4AS_SCAVENGE_FREQ, oc->pcb, oc->_closing? "CLOSING": "");
-        if((millis() - oc->_lastSeen) > H4AS_SCAVENGE_FREQ || oc->_closing) tbd.push_back(oc);
+        H4AT_PRINT1("T=%u OC %p ls=%u age(s)=%u SCAV=%u PCB=%p %s\n",millis(),oc,oc->_lastSeen,(millis() - oc->_lastSeen) / 1000,H4AS_SCAVENGE_FREQ, oc->pcb, oc->_state == H4AT_CONN_CLOSING? "CLOSING": "");
+        if((millis() - oc->_lastSeen) > H4AS_SCAVENGE_FREQ || oc->_state == H4AT_CONN_CLOSING) tbd.push_back(oc);
     }
     for(auto &uc:unconnectedClients){
         H4AT_PRINT1("T=%u UC %p ct=%u age(s)=%u SCAV=%u\n",millis(),uc,uc->_creatTime,(millis() - uc->_creatTime) / 1000,H4AS_SCAVENGE_FREQ);
         // if((millis() - uc->_creatTime) > H4AS_SCAVENGE_FREQ) tbd.push_back(uc);
-        if((uc->pcb==0 && uc->_closing && !uc->__willClose) || ((millis() - uc->_creatTime) > H4AS_SCAVENGE_FREQ)) tbd.push_back(uc);
+        if((uc->pcb==0 && uc->_state == H4AT_CONN_CLOSING) || ((millis() - uc->_creatTime) > H4AS_SCAVENGE_FREQ)) tbd.push_back(uc);
     }
     for(auto &rq:tbd) {
         H4AT_PRINT1("Scavenging %p [%s]\n",rq, openConnections.count(rq) ? "OC" : unconnectedClients.count(rq) ? "UC" : "UNKNOWN"); 
@@ -770,7 +775,7 @@ void H4AsyncClient::_connect() {
     _addSNI();
 #endif
     _notify(altcp_connect(pcb, &_URL.addr, _URL.port,(altcp_connected_fn)&_tcp_connected));
-    heap_caps_check_integrity_all(true);
+    _scavenge();
 }
 
 //
@@ -801,7 +806,7 @@ void H4AsyncClient::connect(IPAddress ip,uint16_t port){
     _connect();
 }
 
-bool H4AsyncClient::connected(){ return !__willClose && !_closing && pcb && getTCPState(pcb, _isSecure) == ESTABLISHED; }
+bool H4AsyncClient::connected(){ return _state == H4AT_CONN_CONNECTED && pcb && getTCPState(pcb, _isSecure) == ESTABLISHED; } // Unnecessary checks? (pcb && getState) as there will happen some data races ...
 
 std::string H4AsyncClient::errorstring(int e){
     #ifdef H4AT_DEBUG
@@ -846,15 +851,15 @@ void H4AsyncClient::TX(const uint8_t* data,size_t len,bool copy, uint8_t* copy_d
     heap_caps_check_integrity_all(true);
     LwIPCoreLocker lock;
     if(!connected()){
-        H4AT_PRINT1("%p TX called %s!\n", this, _closing ? "during close" : __willClose ? "and it will close" : "before connect or after cnx error");
-        _notify(0,(_closing || __willClose)?H4AT_CLOSING:H4AT_UNCONNECTED);
+        H4AT_PRINT1("%p TX called %s!\n", this, _state == H4AT_CONN_CLOSING ? "during close" : _state == H4AT_CONN_WILLCLOSE ? "and it will close" : "before connect or after cnx error");
+        _notify(0,_state == H4AT_CONN_UNCONNECTED ? H4AT_UNCONNECTED : H4AT_CLOSING);
     }
     else{
         uint8_t flags;
         size_t  sent=0;
         size_t  left=len;
         // dumphex(data,len);
-        while(left && !_closing){
+        while(left && _state == H4AT_CONN_CONNECTED){
             size_t available=altcp_sndbuf(pcb);
             auto qlen = altcp_sndqueuelen(pcb);
             // Serial.printf("Av=%d QL=%d\n",available,qlen);
@@ -905,6 +910,7 @@ void H4AsyncClient::TX(const uint8_t* data,size_t len,bool copy, uint8_t* copy_d
                         newdata = (uint8_t *)malloc(left);
                         memcpy(newdata, data + sent, left);
                         copy_data = newdata;
+                        H4AT_PRINT2("copy_data %p\n", copy_data);
                     }
                 }
                 h4.queueFunction([this,newdata,left,copy,copy_data](){ TX(newdata,left,copy,copy_data);});

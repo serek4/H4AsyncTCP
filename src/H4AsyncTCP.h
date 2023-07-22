@@ -119,6 +119,14 @@ struct altcp_pcb;
 #endif
 enum tcp_state getTCPState(struct altcp_pcb *conn, bool tls=false);
 
+enum H4AT_ConectionState : uint8_t {
+    H4AT_CONN_UNCONNECTED,
+    H4AT_CONN_CONNECTED,
+    H4AT_CONN_WILLCLOSE,
+    H4AT_CONN_ERROR,
+    H4AT_CONN_CLOSING
+};
+
 class H4AsyncClient;
 
 using H4AT_NVP_MAP      =std::unordered_map<std::string,std::string>;
@@ -129,14 +137,13 @@ class H4AsyncClient {
         static  void                __scavenge();
         static  bool                _scavenging;
                 void                _parseURL(const std::string& url);
-                bool                __willClose=false;
-                void                _willClose() {__willClose = true;}
         friend  err_t   _raw_recv(void *arg, struct altcp_pcb *tpcb, struct pbuf *p, err_t err);
         friend  err_t   _raw_accept(void *arg, struct altcp_pcb *p, err_t err);
         friend  err_t   _tcp_connected(void* arg, altcp_pcb* tpcb, err_t err);
         friend  void    _raw_error(void *arg, err_t err);
                 bool                _isServer=false;
                 bool                _isSecure=false;
+                H4AT_ConectionState _state = H4AT_CONN_UNCONNECTED;
 #if H4AT_TLS
                 std::array<mbx*,4>  _keys {nullptr,nullptr,nullptr,nullptr};
                 enum {
@@ -183,7 +190,6 @@ class H4AsyncClient {
 #if H4AT_TLS_SESSION
                 H4AT_FN_PTR         _cbSession;
 #endif
-                bool                _closing=false;
         static  H4_INT_MAP          _errorNames;
         //   size_t              _heapLO;
         //   size_t              _heapHI;
