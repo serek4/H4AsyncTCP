@@ -141,7 +141,6 @@ class H4AsyncClient {
         friend  err_t   _raw_accept(void *arg, struct altcp_pcb *p, err_t err);
         friend  err_t   _tcp_connected(void* arg, altcp_pcb* tpcb, err_t err);
         friend  void    _raw_error(void *arg, err_t err);
-                bool                _isServer=false;
                 bool                _isSecure=false;
                 H4AT_ConectionState _state = H4AT_CONN_UNCONNECTED;
 #if H4AT_TLS
@@ -246,7 +245,13 @@ class H4AsyncClient {
                 uint16_t            remotePort();
                 void                TX(const uint8_t* d,size_t len,bool copy=true, uint8_t* copied_data=nullptr); // Don't provide copied_data - it's for internal use only
 
-                uint16_t            getTLSOverhead() { return _ssl_overhead; }
+                uint16_t            getTLSOverhead() {
+#if H4AT_TLS
+                                        return _ssl_overhead; 
+#else
+                                        return 0;
+#endif
+                                    }
 #if H4AT_TLS
                 void                secureTLS(const u8_t *ca, size_t ca_len, const u8_t *privkey = nullptr, size_t privkey_len=0,
                                             const u8_t *privkey_pass = nullptr, size_t privkey_pass_len = 0,

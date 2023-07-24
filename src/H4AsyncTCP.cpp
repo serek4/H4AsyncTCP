@@ -321,7 +321,7 @@ err_t _raw_recv(void *arg, struct altcp_pcb *tpcb, struct pbuf *p, err_t err){
         h4.queueFunction([=](){ rq->_notify(ERR_CLSD, err); });// * warn ...hanging data when closing?
     } else {
 #if H4AT_TLS
-        if (!rq->_ssl_overhead && rq->_isServer) {rq->_fetchTLSOverhead();}
+        if (!rq->_ssl_overhead) {rq->_fetchTLSOverhead();}
 #endif
         auto cpydata=static_cast<uint8_t*>(malloc(p->tot_len));
         if(cpydata){
