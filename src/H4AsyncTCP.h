@@ -152,6 +152,8 @@ class H4AsyncClient {
                     H4AT_TLS_TWO_WAY
                 } _tls_mode = H4AT_TLS_NONE;
                 void                _addSNI(); // Add Server Name Indication to the TLS Context
+                uint32_t            _ssl_overhead=0;
+                void                _fetchTLSOverhead();
 #endif
 
 #if H4AT_TLS_SESSION
@@ -244,6 +246,7 @@ class H4AsyncClient {
                 uint16_t            remotePort();
                 void                TX(const uint8_t* d,size_t len,bool copy=true, uint8_t* copied_data=nullptr); // Don't provide copied_data - it's for internal use only
 
+                uint16_t            getTLSOverhead() { return _ssl_overhead; }
 #if H4AT_TLS
                 void                secureTLS(const u8_t *ca, size_t ca_len, const u8_t *privkey = nullptr, size_t privkey_len=0,
                                             const u8_t *privkey_pass = nullptr, size_t privkey_pass_len = 0,

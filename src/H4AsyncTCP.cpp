@@ -317,9 +317,12 @@ err_t _raw_recv(void *arg, struct altcp_pcb *tpcb, struct pbuf *p, err_t err){
     if (((p == NULL || err!=ERR_OK) && rq->pcb) || rq->_state == H4AT_CONN_CLOSING) {
         H4AT_PRINT1("Will Close!\n");
         if (rq->_state != H4AT_CONN_CLOSING)
-        rq->_state = H4AT_CONN_WILLCLOSE;
+            rq->_state = H4AT_CONN_WILLCLOSE;
         h4.queueFunction([=](){ rq->_notify(ERR_CLSD, err); });// * warn ...hanging data when closing?
     } else {
+#if H4AT_TLS
+        if (!rq->_ssl_overhead && rq->_isServer) {rq->_fetchTLSOverhead();}
+#endif
         auto cpydata=static_cast<uint8_t*>(malloc(p->tot_len));
         if(cpydata){
             pbuf_copy_partial(p,cpydata,p->tot_len,0); // instead of direct memcpy that only considers the first pbuf of the possible pbufs chain.
@@ -387,7 +390,11 @@ err_t _tcp_connected(void* arg, altcp_pcb* tpcb, err_t err){
         altcp_recv(p, &_raw_recv);
         // ***************************************************
         altcp_sent(p, &_raw_sent);
-        
+
+#if H4AT_TLS
+        rq->_fetchTLSOverhead();
+#endif
+
 #if H4AT_TLS_SESSION
         rq->_updateSession();
 #endif
@@ -420,6 +427,18 @@ void H4AsyncClient::_addSNI()
         int ret;
         if (ret=mbedtls_ssl_set_hostname(tls_context, _URL.host.c_str())) {
             H4AT_PRINT2("FAILED %d [%X]\n", ret, ret);
+        }
+    }
+}
+
+void H4AsyncClient::_fetchTLSOverhead()
+{
+    if (_isSecure && pcb){
+        int ssl_expan = mbedtls_ssl_get_record_expansion(static_cast<mbedtls_ssl_context*>(altcp_tls_context(pcb)));
+        if (ssl_expan > 0)
+        {
+            H4AT_PRINT3("SSL EXPANSION %d\n", ssl_expan);
+            _ssl_overhead=ssl_expan;
         }
     }
 }
@@ -805,7 +824,7 @@ void H4AsyncClient::connect(IPAddress ip,uint16_t port){
     _connect();
 }
 
-bool H4AsyncClient::connected(){ return _state == H4AT_CONN_CONNECTED && pcb && getTCPState(pcb, _isSecure) == ESTABLISHED; } // Unnecessary checks? (pcb && getState) as there will happen some data races ...
+bool H4AsyncClient::connected(){ return _state == H4AT_CONN_CONNECTED/*  && pcb && getTCPState(pcb, _isSecure) == ESTABLISHED */; } // Unnecessary checks? (pcb && getState) as there will happen some data races ...
 
 std::string H4AsyncClient::errorstring(int e){
     #ifdef H4AT_DEBUG
