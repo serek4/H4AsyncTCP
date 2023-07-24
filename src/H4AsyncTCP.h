@@ -194,6 +194,7 @@ class H4AsyncClient {
         //   size_t              _heapLO;
         //   size_t              _heapHI;
                 uint32_t            _lastSeen=0;
+                uint32_t            _lastWrite=0;
                 uint32_t            _creatTime=0;
                 bool                _nagle=false;
                 struct altcp_pcb    *pcb;

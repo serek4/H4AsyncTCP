@@ -289,7 +289,7 @@ void H4AsyncClient::_shutdown() {
         h4.queueFunction([]()
                          { H4AsyncClient::__scavenge(); });
     }
-    _clearDanglingInput(); // [x] Should be cleared at all cases (when pcb==null)
+    _clearDanglingInput();
     return _notify(err == ERR_CLSD ? ERR_OK : err);
 }
 
@@ -350,7 +350,7 @@ err_t _raw_recv(void *arg, struct altcp_pcb *tpcb, struct pbuf *p, err_t err){
         }
     }
     if (p) {
-        altcp_recved(tpcb, p->tot_len); // [x] Move down to be called in all cases if (p) ... ?
+        altcp_recved(tpcb, p->tot_len);
         pbuf_free(p);
     }
     return err;
@@ -716,8 +716,6 @@ void H4AsyncClient::_connect() {
         _isSecure = true;
         switch (_tls_mode){
             case H4AT_TLS_ONE_WAY:
-                // if (ca_cert && ca_cert->data) // [ ] Shouldn't be needed.
-                // dumphex(ca_cert->data, ca_cert->len);s
                 _tlsConfig = altcp_tls_create_config_client(ca_cert->data, ca_cert->len);
                 H4AT_PRINT2("ONE WAY TLS _tlsConfig=%p\n", _tlsConfig);
                 break;
@@ -885,6 +883,7 @@ void H4AsyncClient::TX(const uint8_t* data,size_t len,bool copy, uint8_t* copy_d
                     sent+=chunk;
                     left-=chunk;
                 }
+                _lastWrite=millis();
                 heap_caps_check_integrity_all(true);
             }
             else {
@@ -892,15 +891,10 @@ void H4AsyncClient::TX(const uint8_t* data,size_t len,bool copy, uint8_t* copy_d
                 _HAL_feedWatchdog();
                 yield();
 
-                if (millis() - _lastSeen > H4AS_WRITE_TIMEOUT) { // [ ] Comparing to _lastSeen is not correct, probably it wasn't seen before the TX call by a duration of H4AS_WRITE_TIMEOUT.
-                    H4AT_PRINT1("Write TIMEOUT: %d\n", millis() - _lastSeen);
+                if (millis() - _lastWrite > H4AS_WRITE_TIMEOUT) {
+                    H4AT_PRINT1("Write TIMEOUT: %d\n", millis() - _lastWrite);
                     _shutdown();
-                    if (copy_data) {
-                        free(copy_data);
-                        copy_data = nullptr;
-                    }
-                    heap_caps_check_integrity_all(true);
-                    return; // ** Discards the rest of the data.
+                    break;// ** Discards the rest of the data.
                 }
 #if H4AS_QUQUE_ON_CANNOT_WRITE
                 // [x] if copy flag, then copy the data itself and manage it...
@@ -908,9 +902,8 @@ void H4AsyncClient::TX(const uint8_t* data,size_t len,bool copy, uint8_t* copy_d
                 uint8_t *newdata = const_cast<uint8_t*>(data)+sent;
                 if (copy){
                     if (!copy_data) { // Just copy the data once per TX user call.
-                        newdata = (uint8_t *)malloc(left);
-                        memcpy(newdata, data + sent, left);
-                        copy_data = newdata;
+                        mbx m(newdata,left,true);
+                        copy_data = newdata = m.data;
                         H4AT_PRINT2("copy_data %p\n", copy_data);
                     }
                 }
@@ -920,7 +913,9 @@ void H4AsyncClient::TX(const uint8_t* data,size_t len,bool copy, uint8_t* copy_d
             }
         }
     }
-    if (copy_data) free(copy_data);
+    // if (copy_data)
+    //     Serial.printf("PRESENT COYP_DATA %p, CLEARING\n", copy_data);
+    if (copy_data) mbx::clear(copy_data);
     return;
 }
 
