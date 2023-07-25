@@ -29,10 +29,13 @@ build_flags = -DLWIP_ALTCP=1
 ```
 - Ensure `H4AT_USE_TLS` is defined `1` in the configuration file.
 - For clients, call `secureTLS` providing all needed information before calling `connect`. 
+
+* For a complete environment with proper versions and core install, refer to PlatformIO's [H4Plugins_Env](https://github.com/HamzaHajeir/H4Plugins_Env) project.
+
 ```cpp
     #define TWO_WAY_AUTH 1
 
-    H4AsyncClient* client=new H4AsyncClient();
+    H4AsyncClient* client=new H4AsyncClient;
     client->onRX([=](const uint8_t* data, size_t len){ handleData(i,(void*) data,len); });
     std::string ca = "...";
     int ca_len = ca.length()+1; // +1 for PEM encoded certificates, where it should include the null terminator.
@@ -50,9 +53,11 @@ build_flags = -DLWIP_ALTCP=1
     client->connect("https://example.com",443);
 
 ```
+Checkout [Example Code](examples/H4AsyncClient_TLS/H4AsyncClient_TLS.ino).
 
 ### Server:
 Same as described in the previous section, but `H4AsyncServer::secureTLS` should be called on just after boot, anytime before `H4AsyncServer::begin()` is called, and only once.
+Checkout [Example Code](examples/H4AsyncServer_TLS/H4AsyncServer_TLS.ino).
 
 ## Version 0.0.14
 Important critical fixes in managing TLS session, config.
