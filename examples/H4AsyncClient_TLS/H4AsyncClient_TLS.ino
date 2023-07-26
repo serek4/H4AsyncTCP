@@ -133,5 +133,7 @@ void h4setup() {
 	}
 	Serial.printf("\nIP: %s\n",WiFi.localIP().toString().c_str());
 	Serial.printf("Runing on %s\n",ARDUINO_BOARD);
+	Serial.printf("CA CERT Validation: %s\n", H4AsyncClient::isCertValid((const uint8_t*)rootCA.c_str(), rootCA.length() + 1) ? "SUCCEEDED" : "FAILED");
+
 	connect();
 }

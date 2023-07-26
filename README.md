@@ -4,33 +4,40 @@
 
 ## ArduinoIDE library: Asynchronous TCP Rx/Tx Client and abstract Asynchronous server
 
-## TLS Support:
+## TLS Support
+
 TLS is now supported on ESP32, currently cannot be compiled to esp8266 because of missing headers within arduino core, until we could support it, please contact us to setup the workarounds.
 
 For ESP32, currently it requires a custom [arduino-esp32 build](https://github.com/HamzaHajeir/arduino-esp32/tree/lwip-tls) that enables LwIP ALTCP and TLS.  
 
 
-### Usage:
-### Client:
+### Usage
+
+#### Client
+
 - Setup The custom arduino core.
   - For PlatformIO:
+
 ```ini
 platform = espressif32@6.3.1
 board = esp32doit-devkit-v1
 platform_packages =
       platformio/framework-arduinoespressif32 @ https://github.com/HamzaHajeir/arduino-esp32#lwip-tls
 ```
+
 - Ensure proper LWIP compile flags are defined 1:
   - For PlatformIO
+
 ```ini
 build_flags = -DLWIP_ALTCP=1
   -DLWIP_ALTCP_TLS=1
   -DLWIP_ALTCP_TLS_MBEDTLS=1
 ```
+
 - Ensure `H4AT_USE_TLS` is defined `1` in the configuration file.
 - For clients, call `secureTLS` providing all needed information before calling `connect`. 
 
-* For a complete environment with proper versions and core install, refer to PlatformIO's [H4Plugins_Env](https://github.com/HamzaHajeir/H4Plugins_Env) project.
+\* For a complete environment with proper versions and core install, refer to PlatformIO's [H4Plugins_Env](https://github.com/HamzaHajeir/H4Plugins_Env) project.
 
 ```cpp
     #define TWO_WAY_AUTH 1
@@ -53,71 +60,88 @@ build_flags = -DLWIP_ALTCP=1
     client->connect("https://example.com",443);
 
 ```
+
 Checkout [Example Code](examples/H4AsyncClient_TLS/H4AsyncClient_TLS.ino).
 
-### Server:
+#### Server
+
 Same as described in the previous section, but `H4AsyncServer::secureTLS` should be called on just after boot, anytime before `H4AsyncServer::begin()` is called, and only once.
 Checkout [Example Code](examples/H4AsyncServer_TLS/H4AsyncServer_TLS.ino).
 
 ## Version 0.0.14
+
 Important critical fixes in managing TLS session, config.
 Fixes delayed lock in shutdown().
 ## Version 0.0.13
+
 Adds TLS Session support.
 Fixes several memory leaks.
 
 ## Version 0.0.12
+
 Major and deep fixs of TCP usage, including crashes caused by memory corruption and bad timing.  
 Transitioning from `tcpip_api_call` to use LwIP thread locks.  
 And TLS support.
 
 ## Version 0.0.11
-* Fixes missing lwip configuration (NO_SYS) at `h4async_config.h`.
-* Feature: Scavenge a connection upon its shutdown, freeing memory faster.
-* Corrects and tests low memory protection for server new connections.
+
+- Fixes missing lwip configuration (NO_SYS) at `h4async_config.h`.
+- Feature: Scavenge a connection upon its shutdown, freeing memory faster.
+- Corrects and tests low memory protection for server new connections.
 ## Version 0.0.10
-* Corrects the way it works on ESP32, by the correct usage of lwip in OS Mode.
-* Enhances the quality of code and splitting to ESP8266/ESP32
-* SHOULD work on any environment which supports lwip natively, NOT TESTED.
-* Some operations got added, but not tested:
-  * For OS Mode in "Cannot Write" mode and further needs to be queued at another loop, if copy flag is provided then the code just copies it.
+
+- Corrects the way it works on ESP32, by the correct usage of lwip in OS Mode.
+- Enhances the quality of code and splitting to ESP8266/ESP32
+- SHOULD work on any environment which supports lwip natively, NOT TESTED.
+- Some operations got added, but not tested:
+  - For OS Mode in "Cannot Write" mode and further needs to be queued at another loop, if copy flag is provided then the code just copies it.
+
 ## Version 0.0.9
-* Fixes sending large data on ESP8266, where data is chucked up. (Specializes 0.0.7 while loop)
+
+- Fixes sending large data on ESP8266, where data is chucked up. (Specializes 0.0.7 while loop)
+
 ## Version 0.0.8
-* Fixes Out of memory handling mechanism.
-* Prepares for ArmadilloHTTP.
+
+- Fixes Out of memory handling mechanism.
+- Prepares for ArmadilloHTTP.
+- 
 ## Version 0.0.7
-* BUGFIX: Erroneous dereferences and processings of PCBs due to context switches in ESP32:
-* BUGFIX: Repeated acception of a PCB from lwip.
-* Functionality Add: retry tcp_close after a while; by possible out-of-memory. (Not tested)
-* BUGFIX: Fixed the while loop inside TX if can't tcp_write().
-* Adds Some helping functionalities:
-  * printState of PCBs.
-  * checkPCBs: count due to library management.
-* Adds safety functionality: 
-  * Out of memory handling mechanism of new incoming connections. (Not Tested)
+
+- BUGFIX: Erroneous dereferences and processings of PCBs due to context switches in ESP32:
+- BUGFIX: Repeated acception of a PCB from lwip.
+- Functionality Add: retry tcp_close after a while; by possible out-of-memory. (Not tested)
+- BUGFIX: Fixed the while loop inside TX if can't tcp_write().
+- Adds Some helping functionalities:
+  - printState of PCBs.
+  - checkPCBs: count due to library management.
+- Adds safety functionality: 
+  - Out of memory handling mechanism of new incoming connections. (Not Tested)
 \* Note: Still some Serial.printfs are left.  
 \* Tests made on ESP32
 
 ## Version 0.0.6
-* BUGFIX: Nullifying a pcb in _raw_error, which causes _shutDown to not work as expected.
-* ADD: onConnectFail callback to handle a connection failure in the first place.
-* BUGFIX: Using nullified `pcb` in `TX()` by another thread in ESP32 caused by a context switch. 
-* BUGFIX: onDisconnect/onConnectionFail would be called despite the `pcb->state`.
-* BUGFIX: _lastSeen time update on TX, not actual `_raw_sent()` callback.
+
+- BUGFIX: Nullifying a pcb in `_raw_error`, which causes _shutDown to not work as expected.
+- ADD: onConnectFail callback to handle a connection failure in the first place.
+- BUGFIX: Using nullified `pcb` in `TX()` by another thread in ESP32 caused by a context switch. 
+- BUGFIX: onDisconnect/onConnectionFail would be called despite the `pcb->state`.
+- BUGFIX: _lastSeen time update on TX, not actual `_raw_sent()` callback.
+
 ## Version 0.0.5
 
-* BUGFIX: Multiple scavenging of accepted TCP PCBs (as a server).
+- BUGFIX: Multiple scavenging of accepted TCP PCBs (as a server).
+
 ## Version 0.0.4
 
-* BUGFIX: memory leak of unconnected clients instances.
+- BUGFIX: memory leak of unconnected clients instances.
+
 ## Version 0.0.3
 
-* BUGFIX: Infinite loop at TX, rare bug.
+- BUGFIX: Infinite loop at TX, rare bug.
 
 ## Version 0.0.2 (19/10/2021) - Should be considered "ALPHA"
 
-* BUGFIX: memory leak when receiving small msgs
+- BUGFIX: memory leak when receiving small msgs
 
 [Release Notes](docs/relnotes.md)
 
@@ -135,13 +159,13 @@ Licence: ![licence](https://i.creativecommons.org/l/by-nc-sa/4.0/80x15.png) Crea
 
 # Contents
 
-* [What does it do?](#what-does-it-do)
-* [Where does it fit in "The IOT hierarchy of needs"?](#the-iot-hierarchy-of-needs)
-* [Prerequisites](#prerequisites)
-* [Installation](#installation)
-* [Raising Issues](#raising-issues)
-* [Known Problems](#known-problems)
-* [API](#api)
+- [What does it do?](#what-does-it-do)
+- [Where does it fit in "The IOT hierarchy of needs"?](#the-iot-hierarchy-of-needs)
+- [Prerequisites](#prerequisites)
+- [Installation](#installation)
+- [Raising Issues](#raising-issues)
+- [Known Problems](#known-problems)
+- [API](#api)
 
 ---
 
@@ -171,14 +195,9 @@ H4AsyncTCP provides two simple-to-use classes which handle all aspects of Asynch
 
 The library has been tested using the following firmware. Please do not even *think* about raising any issues unless you have the following correctly installed.
 
-* [ESP8266 core 3.0.2](https://github.com/esp8266/Arduino)
-* [ESP32 core 2.0.0](https://github.com/espressif/arduino-esp32)
-* [ArduinoIDE 1.8.16](https://www.arduino.cc/en/software)
-
-***N.B.***
-
-Note that PlatformIO is not in the above list. Many folk *do* use it, but you will need to create your own installation configuration.
-I am currently in discussions to add a PIO install to the standard [H4 Installer](https://github.com/philbowles/h4installer). If you are able to help / contribute to this, please get in touch!
+- [ESP8266 core @^3.0.2](https://github.com/esp8266/Arduino)
+- [ESP32 core @^2.0.0](https://github.com/espressif/arduino-esp32)
+- [ArduinoIDE 1.8.16](https://www.arduino.cc/en/software)
 
 ---
 
@@ -188,7 +207,7 @@ Soon* all H4 libraries will use the [H4 Installer](https://github.com/philbowles
 
 ...Until that's ready, install this library manually by downloading the zip file and using the ArduinoIDE to "add zip library". (Luckily, it has no extra tasks that would require the full H4 installer)
 
-* = Don't ask :) 
+\* = Don't ask :)
 
 ---
 
@@ -212,13 +231,13 @@ Soon* all H4 libraries will use the [H4 Installer](https://github.com/philbowles
 
 The basic structure of your code will be:
 
-* Instantiate `H4AsyncClient` object
-* Declare event handlers for connect/disconnect/RX data/error
-* Connect to remote server
-* Synchronously TX some data...
-* ...and/or asynchronously RX some data
+- Instantiate `H4AsyncClient` object
+- Declare event handlers for connect/disconnect/RX data/error
+- Connect to remote server
+- Synchronously TX some data...
+- ...and/or asynchronously RX some data
 
-#### Error handling:
+### Error handling
 
 `e` is the error and will be one of the values below.
 `i` occasionaly provides additional infor for some errors.
@@ -253,7 +272,7 @@ The basic structure of your code will be:
   {H4AT_OUTPUT_TOO_BIG,"Output exceeds safe heap"}
 ```
 
-*Your* handler function can decide whether the error is fatal or not: if it returns `true`, then the connection will be closed (if not already). If there is an actual closure then the `onDisconnect` event will fire, so be careful not to cause an infinite loop. 
+*Your* handler function can decide whether the error is fatal or not: if it returns `true`, then the connection will be closed (if not already). If there is an actual closure then the `onDisconnect` event will fire, so be careful not to cause an infinite loop.
 
 In the early stages, it is best to always return true and have all errors close the connection.
 
@@ -261,7 +280,7 @@ In the early stages, it is best to always return true and have all errors close 
 
 The main prerequisite of [Example sketch](examples/h4asyncCOMPARISON/h4asyncCOMPARISON.ino) is that there is an "Echo Server" somehwre on the network. The two easiest ways of achieving this are:
 
-* Windows10 systems:
+\* Windows10 systems:
 
 In control panel / programs / turn Windows features on or off, select "Simple TCPIP services..."
 
@@ -269,7 +288,7 @@ In control panel / programs / turn Windows features on or off, select "Simple TC
 
 After reboot you will find an Echo server on port 7
 
-* On any system having Python3 installed
+\* On any system having Python3 installed
 
 Run the provided [Python Echo Server](src/echoserver.py) which listens on 8007
 
@@ -290,23 +309,24 @@ If you set `USE_ASYNC_CLIENT` to 1, the sketch will compile using the ESPAsyncTC
 Results of running the code against both libraries on both ESP8266 and ESP32 can be found [here](docs/testoutput32.txt)
 
 ---
+
 ## As a TCP Server
 
 `H4AsyncServer` is highly abstract - it has only one non-virtual function `onError`.
 
 To create your own server then you need to define virtual overrides for:
 
-* `_instantiateRequest`
+- `_instantiateRequest`
 
 This is only required if you have subclassed `H4AsyncClient`. Here you instantiate your server handler object and return a pointer to its base `H4AsyncClient`. In most cases, the default `H4AsyncClient` will suffice
 
-* `begin`
+- `begin`
   Call the base class `begin` to set up incoming connection handling on the designated port, then do anything your own server needs during initialisation.
 
-* `reset`
+- `reset`
   Deallocate any open resources / handles / memory etc and set your class so that a subsequent call to `begin` will bring server to initial state as it would have done on 1st call.
 
-* `route(void* c,const uint8_t* data,size_t len`
+- `route(void* c,const uint8_t* data,size_t len`
   This is the main "handler" for your server. `c` is a client* and will be `H4AsyncClient*` unless you have subclassed it in `_instantiateRequest`. `data` and `len` describe the raw data of the message that caused the incoming connection.
 
   Here you will analyse, parse, act upon the incoming message in whatever way defines your server and then reply to the incoming request with e.g. `c->TX(someReplyDataPointer,someReplyDataLength);`
@@ -321,10 +341,10 @@ See the fully-functional example below in the [Server API](#server-api) section
 
 ### Client Callbacks
 
-* `void cbConnect(void)`
-* `void cbDisconnect(void)`
-* `bool cbError(int e,int i)`
-* `void rxFunction(const uint8_t* data, size_t len)`
+- `void cbConnect(void)`
+- `void cbDisconnect(void)`
+- `bool cbError(int e,int i)`
+- `void rxFunction(const uint8_t* data, size_t len)`
 
 ### Client Methods
 
@@ -368,16 +388,16 @@ ESP8266 targets will happily resolve `.local` names. See "Known Issues" re ESP32
 
 #### Valid examples
 
-* `http://192.168.1.15` // defaults to port 80
-* `http://mosquitto.local:8883` // .local only works on ESP8266 at the moment
-* `http://insecure.remote.ru:12345/long/resource/path/?data=123&moredata=456`
+- `http://192.168.1.15` // defaults to port 80
+- `http://mosquitto.local:8883` // .local only works on ESP8266 at the moment
+- `http://insecure.remote.ru:12345/long/resource/path/?data=123&moredata=456`
 
 ---
 ## Server
 
 ### Server Callbacks
 
-* `void cbError(int e,int i)`
+- `void cbError(int e,int i)`
 
 ### Server Methods
 
@@ -419,9 +439,9 @@ EchoServer echo(7); // listen on port 7 and echo any input
 
 # Known Problems
 
-* ESP32 version cannot resolve `.local` addresses so you will need to specify or resolve the IP address yourself.
+- ESP32 version cannot resolve `.local` addresses so you will need to specify or resolve the IP address yourself.
 
-* Heap protection is not yet implemented, so you are recommended to stay within size / speed limits as much as possible. There is a problem *somewhere* in that once the users goes beyond the "window size", certain combinations of TX / RX size, nagle on/off, network speed? cause some packets not to get ACKed by the remote server.
+- Heap protection is not yet implemented, so you are recommended to stay within size / speed limits as much as possible. There is a problem *somewhere* in that once the users goes beyond the "window size", certain combinations of TX / RX size, nagle on/off, network speed? cause some packets not to get ACKed by the remote server.
 
 Hence until this is solved, one cannot safely determine the "max safe packet size" required for the heap protection mechanism. *[ I currently suspect LwIP - any help in this area would be most welcome! (and will almost certainly turn out to be H4 code of course... )]*
 
@@ -437,11 +457,11 @@ Until then, try to keep packets smaller than a SND_BUF on TX and WND on RX when 
 
 ---
 
-(c) 2021 Phil Bowles h4plugins@gmail.com
+(c) 2021 Phil Bowles <h4plugins@gmail.com>
 
-* [Support me on Patreon](https://patreon.com/esparto)
-* [Youtube channel (instructional videos)](https://www.youtube.com/channel/UCYi-Ko76_3p9hBUtleZRY6g)
-* [Facebook H4  Support / Discussion](https://www.facebook.com/groups/444344099599131/)
-* [Facebook General ESP8266 / ESP32](https://www.facebook.com/groups/2125820374390340/)
-* [Facebook ESP8266 Programming Questions](https://www.facebook.com/groups/esp8266questions/)
-* [Facebook ESP Developers (moderator)](https://www.facebook.com/groups/ESP8266/)
+- [Support me on Patreon](https://patreon.com/esparto)
+- [Youtube channel (instructional videos)](https://www.youtube.com/channel/UCYi-Ko76_3p9hBUtleZRY6g)
+- [Facebook H4  Support / Discussion](https://www.facebook.com/groups/444344099599131/)
+- [Facebook General ESP8266 / ESP32](https://www.facebook.com/groups/2125820374390340/)
+- [Facebook ESP8266 Programming Questions](https://www.facebook.com/groups/esp8266questions/)
+- [Facebook ESP Developers (moderator)](https://www.facebook.com/groups/ESP8266/)

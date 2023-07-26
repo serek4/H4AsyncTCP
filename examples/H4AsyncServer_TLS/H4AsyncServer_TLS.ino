@@ -113,8 +113,8 @@ void h4setup() {
 	Serial.printf("\nIP: %s\n",WiFi.localIP().toString().c_str());
 	Serial.printf("Runing on %s\n",ARDUINO_BOARD);
 
-	Serial.printf("WEBSERVER CERT Validation: %s\n", H4AsyncClient::isCertValid((const uint8_t*)serverCert.c_str(), serverCert.length() + 1) ? "SUCCEEDED" : "FAILED");
-	Serial.printf("WEBSERVER KEY Validation: %s\n", H4AsyncClient::isPrivKeyValid((const uint8_t*)serverPrivateKey.c_str(), serverPrivateKey.length() + 1) ? "SUCCEEDED" : "FAILED");
+	Serial.printf("SERVER CERT Validation: %s\n", H4AsyncClient::isCertValid((const uint8_t*)serverCert.c_str(), serverCert.length() + 1) ? "SUCCEEDED" : "FAILED");
+	Serial.printf("SERVER KEY Validation: %s\n", H4AsyncClient::isPrivKeyValid((const uint8_t*)serverPrivateKey.c_str(), serverPrivateKey.length() + 1) ? "SUCCEEDED" : "FAILED");
 
 	begin(); // For event-based system, call this onWiFiConnect() callback;
 }
