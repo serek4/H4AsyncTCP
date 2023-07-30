@@ -39,15 +39,30 @@ SOFTWARE.
 #define H4AT_TLS_CHECKER    1 // for isCertValid() and isPrivKeyValid()
 #define H4AT_USE_TLS_SESSION    1
 
-#if NO_SYS==0
+
+#define H4AT_HAS_RTOS     (NO_SYS == 0)
+
+#if H4AT_HAS_RTOS
 #define H4AS_RTOS_GET_THREAD_NAME   pcTaskGetName(NULL) // For FreeRTOS (ESP32)
 #endif
 
+#ifdef ARDUINO_ARCH_ESP32
+#define H4AT_HAS_ALTCP      1
+#elif defined(ARDUINO_ARCH_ESP8266)
+#define H4AT_HAS_ALTCP      0
+#undef H4AT_TLS_CHECKER
+#define H4AT_TLS_CHECKER    0
+#endif
+
+
 #if LWIP_ALTCP && LWIP_ALTCP_TLS && LWIP_ALTCP_TLS_MBEDTLS
+#if !H4AT_HAS_ALTCP
+#error "The platform doesn't support LWIP ALTCP TLS MBEDTLS"
+#endif
 #define H4AT_TLS        H4AT_USE_TLS
 #else
 #if H4AT_USE_TLS
-#pragma message "Ensure you're using the correct Arduino Core build that supports LwIP ALTCP TLS MBEDTLS"
+#pragma message "TLS is Disabled. Ensure you're using the correct Arduino Core build that supports LwIP ALTCP TLS MBEDTLS"
 #endif
 #define H4AT_TLS        0
 #endif

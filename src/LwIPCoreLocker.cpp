@@ -7,11 +7,14 @@ volatile int LwIPCoreLocker::_locks;
 #define PRINTAPPENDS "\t=====LOCKER=====\t"
 
 LwIPCoreLocker::LwIPCoreLocker() {
+#if H4AT_HAS_RTOS
 	lock();
+#endif
 }
 
 void LwIPCoreLocker::unlock()
 {
+#if H4AT_HAS_RTOS
 	H4AT_PRINT4(PRINTAPPENDS"LwIPCoreLocker::unlock _locks=%d _locked=%d\n", _locks, _locked);
 	if (strcmp(H4AS_RTOS_GET_THREAD_NAME, TCPIP_THREAD_NAME) == 0)
 	{
@@ -24,17 +27,20 @@ void LwIPCoreLocker::unlock()
 			UNLOCK_TCPIP_CORE();
 	}
 	_locked=false;
-
+#endif
 }
 
 LwIPCoreLocker::~LwIPCoreLocker()
 {
+#if H4AT_HAS_RTOS
 	H4AT_PRINT4(PRINTAPPENDS"~LwIPCoreLocker\n");
 	unlock();
+#endif
 }
 
 void LwIPCoreLocker::lock()
 {
+#if H4AT_HAS_RTOS
 	H4AT_PRINT4(PRINTAPPENDS"LwIPCoreLocker _locks=%d _locked=%d\n", _locks, _locked);
 	if (_locked) {
 		H4AT_PRINT4(PRINTAPPENDS "LwIPCoreLocker Already locked\n");
@@ -49,4 +55,5 @@ void LwIPCoreLocker::lock()
 		LOCK_TCPIP_CORE();
 	}
 	_locked=true;
+#endif
 }

@@ -23,9 +23,13 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 */
 #include<H4AsyncTCP.h>
-#include "lwip/altcp.h"
+#include "lwip_altcp.h"
+#if H4AT_HAS_ALTCP
 #include "lwip/altcp_tcp.h"
 #include "lwip/altcp_tls.h"
+#else
+#include "lwip/tcp.h"
+#endif
 
 bool H4AsyncServer::_bakov=false;
 err_t _raw_accept(void *arg, struct altcp_pcb *p, err_t err){

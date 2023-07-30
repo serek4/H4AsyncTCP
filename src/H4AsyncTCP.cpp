@@ -34,9 +34,11 @@ For example, other rights such as publicity, privacy, or moral rights may limit 
 #include "IPAddress.h"
 
 #include "lwip/tcp.h"
-#include "lwip/altcp.h"
+#include "lwip_altcp.h"
+#if H4AT_HAS_ALTCP
 #include "lwip/altcp_tcp.h"
 #include "lwip/altcp_tls.h"
+#endif
 #include "lwip/dns.h"
 
 #if H4AT_TLS_CHECKER

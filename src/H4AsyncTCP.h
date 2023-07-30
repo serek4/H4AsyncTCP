@@ -38,11 +38,7 @@ For example, other rights such as publicity, privacy, or moral rights may limit 
 #include "lwip/err.h"
 #include "lwip/tcpbase.h"
 
-#ifdef ARDUINO_ARCH_ESP8266
-    #include<ESP8266WiFi.h>
-#else
-    #include<WiFi.h>
-#endif
+#include "IPAddress.h"
 
 #include <H4Tools.h>
 #include <H4.h>
@@ -115,7 +111,7 @@ enum {
 #if LWIP_ALTCP
 struct altcp_pcb;
 #else
-#include "lwip/altcp.h" // Contains appropriate preprocessors if TLS macros aren't defined.
+#include "lwip_altcp.h" // Contains appropriate preprocessors if TLS macros aren't defined.
 #endif
 enum tcp_state getTCPState(struct altcp_pcb *conn, bool tls=false);
 
