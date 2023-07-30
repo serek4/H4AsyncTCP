@@ -4,6 +4,10 @@
 
 ## ArduinoIDE library: Asynchronous TCP Rx/Tx Client and abstract Asynchronous server
 
+### Version 0.0.17
+
+Adds ESP8266 Compatibility.
+
 ### Version 0.0.16
 
 Ensure synchronization of writes to prevent scrambled transmitted data.
