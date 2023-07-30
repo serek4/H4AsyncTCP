@@ -152,7 +152,7 @@ class H4AsyncClient {
                 bool                _processQueue();
                 void                _popQueue() { if (_queue.size()) { delete _queue.front(); _queue.pop();} }
         static  bool                _validConnection(H4AsyncClient* c) { return openConnections.count(c); }
-        static  std::unordered_set<H4AsyncClient*> queueClients;
+        static  std::unordered_set<H4AsyncClient*> txQueueClients;
                 H4AT_TCP_QUEUE      _queue;
         friend  err_t   _raw_sent(void* arg,struct altcp_pcb *tpcb, u16_t len);
         friend  err_t   _raw_recv(void *arg, struct altcp_pcb *tpcb, struct pbuf *p, err_t err);

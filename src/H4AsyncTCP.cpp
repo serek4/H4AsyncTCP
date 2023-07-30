@@ -80,7 +80,12 @@ H4_INT_MAP H4AsyncClient::_errorNames={
     {H4AT_HEAP_LIMITER_LOST,"Heap Limiter: packet discarded"},
     {H4AT_INPUT_TOO_BIG,"Input exceeds safe heap"},
     {H4AT_CLOSING,"Client closing"},
-    {H4AT_OUTPUT_TOO_BIG,"Output exceeds safe heap"}
+    {H4AT_OUTPUT_TOO_BIG,"Output exceeds safe heap"},
+    {H4AT_ERR_NO_PCB,"No PCB"},
+#if H4AT_TLS
+    {H4AT_BAD_TLS_CONFIG,"BAD TLS Config"},
+    {H4AT_WRONG_TLS_MODE,"Wrong TLS Mode"}
+#endif
 #endif
 };
 
