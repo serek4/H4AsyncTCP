@@ -39,12 +39,7 @@ SOFTWARE.
 #define H4AT_TLS_CHECKER    1 // for isCertValid() and isPrivKeyValid()
 #define H4AT_USE_TLS_SESSION    1
 
-#if NO_SYS
-#define H4AS_QUQUE_ON_CANNOT_WRITE  false
-#define H4AS_WRITE_TIMEOUT 10000
-#else
-#define H4AS_QUQUE_ON_CANNOT_WRITE  true
-#define H4AS_WRITE_TIMEOUT 3000
+#if NO_SYS==0
 #define H4AS_RTOS_GET_THREAD_NAME   pcTaskGetName(NULL) // For FreeRTOS (ESP32)
 #endif
 

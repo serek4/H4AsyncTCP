@@ -128,15 +128,33 @@ enum H4AT_ConectionState : uint8_t {
 };
 
 class H4AsyncClient;
-
+struct TCPData {
+    mbx m;
+    size_t tx_len;
+    TCPData(const uint8_t* data, size_t length, bool copy) : m(const_cast<uint8_t*>(data),length,copy), tx_len(0){
+        // Serial.printf("TCPData()->%p\n", m.data);
+    }
+    ~TCPData() {
+        // Serial.printf("~TCPData(%p)\n", m.data);
+        m.clear();
+    }
+};
 using H4AT_NVP_MAP      =std::unordered_map<std::string,std::string>;
 using H4AT_FN_ERROR     =std::function<bool(int,int)>;
 using H4AT_FN_RXDATA    =std::function<void(const uint8_t* data, size_t len)>;
 using H4AT_FN_PTR       =std::function<void(void*)>;
+using H4AT_TCP_QUEUE    =std::queue<TCPData*>;
 class H4AsyncClient {
         static  void                __scavenge();
         static  bool                _scavenging;
                 void                _parseURL(const std::string& url);
+                size_t              _processTX(const uint8_t* data, size_t length, bool copy);
+                bool                _processQueue();
+                void                _popQueue() { if (_queue.size()) { delete _queue.front(); _queue.pop();} }
+        static  bool                _validConnection(H4AsyncClient* c) { return openConnections.count(c); }
+        static  std::unordered_set<H4AsyncClient*> queueClients;
+                H4AT_TCP_QUEUE      _queue;
+        friend  err_t   _raw_sent(void* arg,struct altcp_pcb *tpcb, u16_t len);
         friend  err_t   _raw_recv(void *arg, struct altcp_pcb *tpcb, struct pbuf *p, err_t err);
         friend  err_t   _raw_accept(void *arg, struct altcp_pcb *p, err_t err);
         friend  err_t   _tcp_connected(void* arg, altcp_pcb* tpcb, err_t err);
@@ -195,7 +213,6 @@ class H4AsyncClient {
         //   size_t              _heapLO;
         //   size_t              _heapHI;
                 uint32_t            _lastSeen=0;
-                uint32_t            _lastWrite=0;
                 uint32_t            _creatTime=0;
                 bool                _nagle=false;
                 struct altcp_pcb    *pcb;
@@ -243,7 +260,7 @@ class H4AsyncClient {
                 IPAddress           remoteIP();
                 std::string         remoteIPstring();
                 uint16_t            remotePort();
-                void                TX(const uint8_t* d,size_t len,bool copy=true, uint8_t* copied_data=nullptr); // Don't provide copied_data - it's for internal use only
+                void                TX(const uint8_t* d,size_t len,bool copy=true);
 
                 uint16_t            getTLSOverhead() {
 #if H4AT_TLS
@@ -316,10 +333,12 @@ class H4AsyncServer {
 };
 
 class LwIPCoreLocker {
-    static volatile int _locks;
-    bool _locked=false;
-public:    
-    LwIPCoreLocker();
-    void unlock();
-    ~LwIPCoreLocker();
+    static volatile int         _locks;
+                    bool        _locked=false;
+    public:
+        LwIPCoreLocker();
+                    void        unlock();
+        ~LwIPCoreLocker();
+                    bool        locked() { return _locked; }
+                    void        lock();
 };

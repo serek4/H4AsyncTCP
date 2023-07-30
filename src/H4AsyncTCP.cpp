@@ -49,6 +49,7 @@ u16_t altcp_get_port(struct altcp_pcb *conn, int local){
     return local ? conn->local_port : conn ->remote_port;
 }
 #endif
+std::unordered_set<H4AsyncClient*> H4AsyncClient::txQueueClients;
 std::unordered_set<H4AsyncClient*> H4AsyncClient::openConnections;
 std::unordered_set<H4AsyncClient*> H4AsyncClient::unconnectedClients;
 bool H4AsyncClient::_scavenging = false;
@@ -313,7 +314,8 @@ void _raw_error(void *arg, err_t err){
 err_t _raw_recv(void *arg, struct altcp_pcb *tpcb, struct pbuf *p, err_t err){
     H4AT_PRINT1("_raw_recv %p tpcb=%p p=%p err=%d data=%p tot_len=%d\n",arg,tpcb,p, err, p ? p->payload:0,p ? p->tot_len:0);
     auto rq=reinterpret_cast<H4AsyncClient*>(arg);
-    H4AT_PRINT2("_state=%d \"%s\"\n", rq->_state, h4at_state_str[rq->_state]);
+    if (rq->_state!=H4AT_CONN_CONNECTED)
+        H4AT_PRINT2("_state=%d \"%s\"\n", rq->_state, h4at_state_str[rq->_state]);
     if (((p == NULL || err!=ERR_OK) && rq->pcb) || rq->_state == H4AT_CONN_CLOSING) {
         H4AT_PRINT1("Will Close!\n");
         if (rq->_state != H4AT_CONN_CLOSING)
@@ -333,12 +335,13 @@ err_t _raw_recv(void *arg, struct altcp_pcb *tpcb, struct pbuf *p, err_t err){
             h4.queueFunction([rq,cpydata,cpylen,cpyflags]{
                 H4AT_PRINT2("_raw_recv %p data=%p L=%d f=0x%02x \n",rq,cpydata,cpylen,cpyflags);
                 LwIPCoreLocker lock; // To ensure no data race between two threads, .
-                if (rq->_state == H4AT_CONN_CLOSING || rq->_state == H4AT_CONN_ERROR) {
+                if (rq->_state == H4AT_CONN_CLOSING || rq->_state == H4AT_CONN_ERROR || !H4AsyncClient::_validConnection(rq)) { // OR !(state==CONNECTED||state==WiLLCLOSE)
                     H4AT_PRINT2("Prevent processing of closing connection\n");
                     return;
                 }
-                if (rq->_state == H4AT_CONN_WILLCLOSE) H4AT_PRINT1("WATCHOUT THE CONNECTION UNDER CLOSING!\n");
+                if (rq->_state == H4AT_CONN_WILLCLOSE) H4AT_PRINT2("WATCHOUT THE CONNECTION UNDER CLOSING!\n");
                 rq->_lastSeen=millis();
+                lock.unlock();
                 rq->_handleFragment((const uint8_t*) cpydata,cpylen,cpyflags);
             },[cpydata]{
                 H4AT_PRINT3("FREEING NON REBUILT @ %p\n",cpydata);
@@ -363,6 +366,13 @@ err_t _raw_sent(void* arg,struct altcp_pcb *tpcb, u16_t len){
     H4AT_PRINT2("_raw_sent %p pcb=%p len=%d\n",arg,tpcb,len);
     auto rq=reinterpret_cast<H4AsyncClient*>(arg);
     rq->_lastSeen=millis();
+    if (H4AsyncClient::txQueueClients.size()){
+        h4.queueFunction([]{
+            for (auto c:H4AsyncClient::txQueueClients){
+                c->_processQueue();
+            }
+        });
+    }
     return ERR_OK;
 }
 
@@ -372,13 +382,13 @@ err_t _tcp_connected(void* arg, altcp_pcb* tpcb, err_t err){
     rq->_state = H4AT_CONN_CONNECTED;
     h4.queueFunction([rq,tpcb,err](){
         H4AT_PRINT2("QF tcp_connected %p %p e=%d\n",rq,tpcb,err);
-        LwIPCoreLocker LOCK;
+        LwIPCoreLocker lock;
         auto p=reinterpret_cast<altcp_pcb*>(tpcb);
-#if H4AT_DEBUG
         if (!rq->connected()){
             H4AT_PRINT2("NOT CONNECTED ANYMORE\n");
             return;
         }
+#if H4AT_DEBUG
         auto ip_ = altcp_get_ip(tpcb,0);
         IPAddress ip(ip_addr_get_ip4_u32(ip_));
         H4AT_PRINT1("C=%p _tcp_connected p=%p e=%d IP=%s:%d\n",rq,tpcb,err,ip.toString().c_str(),altcp_get_port(tpcb,0));
@@ -598,7 +608,9 @@ H4AsyncClient::~H4AsyncClient()
         }
     }
 #endif
-
+    while(_queue.size())
+        _popQueue();
+    txQueueClients.erase(this);
 }
 
 void H4AsyncClient::_clearDanglingInput() {
@@ -679,7 +691,7 @@ void H4AsyncClient::_scavenge(){
     static bool started=false;
     if (!started)
     {
-        Serial.printf("Starting the SCAVENGER\n");
+        H4AT_PRINT2("Starting the SCAVENGER\n");
         h4.every(
             H4AS_SCAVENGE_FREQ,
             []
@@ -864,77 +876,108 @@ IPAddress H4AsyncClient::remoteIP(){ return IPAddress( remoteAddress()); }
 std::string H4AsyncClient::remoteIPstring(){ return std::string(ipaddr_ntoa(altcp_get_ip(pcb,0))); }
 uint16_t H4AsyncClient::remotePort(){ return altcp_get_port(pcb,0);  }
 
-void H4AsyncClient::TX(const uint8_t* data,size_t len,bool copy, uint8_t* copy_data){ 
-    H4AT_PRINT1("TX pcb=%p data=%p len=%d copy=%d max=%d copy_data=%p\n",pcb,data,len,copy, maxPacket(), copy_data);
-    heap_caps_check_integrity_all(true);
+size_t H4AsyncClient::_processTX(const uint8_t *data, size_t length, bool copy)
+{
+    H4AT_PRINT2("_processTX(%p,%d,%d)\n", data,length,copy);
+    LwIPCoreLocker lock;
+    if (!connected()) return ERR_CONN;
+    uint8_t flags;
+    size_t  sent=0;
+    size_t  left=length;
+    // dumphex(data,len);
+
+    while(left){
+        size_t available=altcp_sndbuf(pcb);
+        auto qlen = altcp_sndqueuelen(pcb);
+        if(available && qlen < TCP_SND_QUEUELEN){
+            auto chunk=std::min(left,available);
+            flags=copy ? TCP_WRITE_FLAG_COPY:0;
+            if(left - chunk) flags |= TCP_WRITE_FLAG_MORE;
+            H4AT_PRINT2("WRITE %p L=%d F=0x%02x LEFT=%d Q=%d\n",data+sent,chunk,flags,left,qlen);
+            auto err = altcp_write(pcb, data+sent, chunk, flags);
+            if(!err) {
+                err=altcp_output(pcb);
+                if(err) H4AT_PRINT1("ERR %d after output H=%u sb=%d Q=%d\n",err,_HAL_freeHeap(),altcp_sndbuf(pcb),altcp_sndqueuelen(pcb));
+            }
+
+            // lock.unlock();
+            if (err) {
+                H4AT_PRINT1("ERR %d after write H=%u sb=%d Q=%d\n", err, _HAL_freeHeap(), altcp_sndbuf(pcb), altcp_sndqueuelen(pcb));
+                _notify(err,44);
+                return err;
+            }
+            else {
+                sent+=chunk;
+                left-=chunk;
+            }
+        } 
+        else break;
+    }
+
+	return sent;
+}
+
+bool H4AsyncClient::_processQueue() {
+    H4AT_PRINT2("_processQueue\n");
+
+    LwIPCoreLocker lock;
+    if (!connected()) {
+        H4AT_PRINT2("_processQueue UNCONNECTED!\n");
+        return false;
+    }
+    bool done=true;
+
+    H4AT_PRINT3("_queue.size() %d\n", _queue.size());
+    while (_queue.size() && done) {
+        done=false;
+        auto& qd=*_queue.front();
+        auto sent = _processTX(qd.m.data+qd.tx_len, qd.m.len-qd.tx_len, qd.m.managed);
+        // Serial.printf("sent=%d condition %d\n", sent, sent>0 && sent<=qd.m.len);
+        if (sent>0 && sent<=qd.m.len)
+            qd.tx_len+=sent;
+
+        if (qd.tx_len==qd.m.len){
+            _popQueue();
+            done=true;
+        }
+    }
+    // if (_queue.size())
+    //     h4.queueFunction([=]{_processQueue();},nullptr,H4AT_TCPQUEUE_ID,true); // Bug in h4.queueFunction (overriding?) for singletons
+    if (_queue.empty()) txQueueClients.erase(this);
+    return _queue.empty();
+}
+
+
+void H4AsyncClient::TX(const uint8_t* data,size_t len,bool copy){ 
+    H4AT_PRINT1("TX pcb=%p data=%p len=%d copy=%d max=%d\n",pcb,data,len,copy, maxPacket());
     LwIPCoreLocker lock;
     if(!connected()){
         H4AT_PRINT1("%p TX called %s!\n", this, _state == H4AT_CONN_CLOSING ? "during close" : _state == H4AT_CONN_WILLCLOSE ? "and it will close" : "before connect or after cnx error");
         _notify(0,_state == H4AT_CONN_UNCONNECTED ? H4AT_UNCONNECTED : H4AT_CLOSING);
     }
-    else{
-        uint8_t flags;
-        size_t  sent=0;
-        size_t  left=len;
-        // dumphex(data,len);
-        while(left && _state == H4AT_CONN_CONNECTED){
-            size_t available=altcp_sndbuf(pcb);
-            auto qlen = altcp_sndqueuelen(pcb);
-            // Serial.printf("Av=%d QL=%d\n",available,qlen);
-            if(available && (qlen < TCP_SND_QUEUELEN )){
-                auto chunk=std::min(left,available);
-                flags=copy ? TCP_WRITE_FLAG_COPY:0;
-                if(left - chunk) flags |= TCP_WRITE_FLAG_MORE;
-                H4AT_PRINT2("WRITE %p L=%d F=0x%02x LEFT=%d Q=%d\n",data+sent,chunk,flags,left,qlen);
+    else {
+        auto emptyQ=_processQueue();
+        size_t sent=0;
 
-                auto err = altcp_write(pcb, data+sent, chunk, flags);
-                if(!err) {
-                    err=altcp_output(pcb);
-                    if(err) H4AT_PRINT1("ERR %d after output H=%u sb=%d Q=%d\n",err,_HAL_freeHeap(),altcp_sndbuf(pcb),qlen);
-                }
-                if (err) {
-                    H4AT_PRINT1("ERR %d after write H=%u sb=%d Q=%d\n", err, _HAL_freeHeap(), altcp_sndbuf(pcb), altcp_sndqueuelen(pcb));
-                    _notify(err,44);
-                    if (copy_data) free(copy_data);
-                    return; // [x] copy_data is not freed (Better manage it..)
-                }
-                else {
-                    sent+=chunk;
-                    left-=chunk;
-                }
-                _lastWrite=millis();
-                heap_caps_check_integrity_all(true);
-            }
-            else {
-                H4AT_PRINT1("Cannot write: available=%d QL=%d p=%p\n",available,qlen, pcb);
-                _HAL_feedWatchdog();
-                yield();
-
-                if (millis() - _lastWrite > H4AS_WRITE_TIMEOUT) {
-                    H4AT_PRINT1("Write TIMEOUT: %d\n", millis() - _lastWrite);
-                    _shutdown();
-                    break;// ** Discards the rest of the data.
-                }
-#if H4AS_QUQUE_ON_CANNOT_WRITE
-                // [x] if copy flag, then copy the data itself and manage it...
-                // [ ] TEST
-                uint8_t *newdata = const_cast<uint8_t*>(data)+sent;
-                if (copy){
-                    if (!copy_data) { // Just copy the data once per TX user call.
-                        mbx m(newdata,left,true);
-                        copy_data = newdata = m.data;
-                        H4AT_PRINT2("copy_data %p\n", copy_data);
-                    }
-                }
-                h4.queueFunction([this,newdata,left,copy,copy_data](){ TX(newdata,left,copy,copy_data);});
-                return;
-#endif
+        if (emptyQ) {
+            sent = _processTX(data, len, copy);
+            H4AT_PRINT2("_processTX()->%d\n", sent);
+        } else {
+            H4AT_PRINT2("_queue isn't empty!\n");
+        }
+        lock.unlock();
+        if (sent>=0 && sent<=len){
+            if (sent < len){
+                H4AT_PRINT2("Incomplete TX left %d\n", len - sent);
+                // Do queue the current TX.
+                _queue.push(new TCPData{data+sent, len-sent, copy});
+                txQueueClients.insert(this);
+                // h4.queueFunction([=]
+                //                  { _processQueue(); }, // callable upon _raw_sent
+                //                  nullptr, H4AT_TCPQUEUE_ID, true);
             }
         }
     }
-    // if (copy_data)
-    //     Serial.printf("PRESENT COYP_DATA %p, CLEARING\n", copy_data);
-    if (copy_data) mbx::clear(copy_data);
     return;
 }
 
