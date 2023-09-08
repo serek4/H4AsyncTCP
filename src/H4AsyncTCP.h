@@ -298,7 +298,8 @@ class H4AsyncServer {
 
 #endif
     public:
-            size_t                _heap_alloc=0; // Single Server Accept heap usage.
+            size_t                  _heap_alloc=0; // Single Server Accept heap usage.
+            size_t                  _block_alloc=0;// Largest memory block required for serving.
             H4AT_FN_ERROR        _srvError;
         H4AsyncServer(uint16_t port): _port(port){}
         virtual ~H4AsyncServer(){}
@@ -326,6 +327,7 @@ class H4AsyncServer {
                                             _bakov = false;
                                             return true;
                                         };
+
 };
 
 class LwIPCoreLocker {

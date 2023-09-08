@@ -294,6 +294,7 @@ void H4AsyncClient::_shutdown() {
     }
     if (!_scavenging) {
         H4AT_PRINT1("Queueing __scavange()\n");
+        bool _scavenging = true;
         h4.queueFunction([]()
                          { H4AsyncClient::__scavenge(); });
     }
@@ -400,6 +401,7 @@ err_t _tcp_connected(void* arg, altcp_pcb* tpcb, err_t err){
         IPAddress ip(ip_addr_get_ip4_u32(ip_));
         H4AT_PRINT1("C=%p _tcp_connected p=%p e=%d IP=%s:%d\n",rq,tpcb,err,ip.toString().c_str(),altcp_get_port(tpcb,0));
 #endif
+        rq->_lastSeen = millis();
         H4AsyncClient::openConnections.insert(rq);
         H4AsyncClient::unconnectedClients.erase(rq);
         H4AsyncClient::checkPCBs("CONNECTED", 1);
@@ -713,7 +715,6 @@ void H4AsyncClient::_scavenge(){
 void H4AsyncClient::__scavenge()
 {
     H4AT_PRINT1("SCAVENGE CONNECTIONS! oc=%u uc=%u\n", openConnections.size(), unconnectedClients.size());
-    _scavenging = true;
     std::vector<H4AsyncClient*> tbd;
     // Nullified PCBs are not really needed to check, as _shutdown() will reset _lastSeen.
     for(auto &oc:openConnections){
@@ -925,7 +926,7 @@ size_t H4AsyncClient::_processTX(const uint8_t *data, size_t length, bool copy)
 }
 
 bool H4AsyncClient::_processQueue() {
-    H4AT_PRINT2("_processQueue\n");
+    H4AT_PRINT2("_processQueue %p\n", this);
 
     LwIPCoreLocker lock;
     if (!connected()) {
@@ -938,12 +939,12 @@ bool H4AsyncClient::_processQueue() {
     while (_queue.size() && done) {
         done=false;
         auto& qd=*_queue.front();
-        auto sent = _processTX(qd.m.data+qd.tx_len, qd.m.len-qd.tx_len, qd.m.managed);
+        auto sent = _processTX(qd.m.data + qd.tx_len, qd.m.len - qd.tx_len, qd.m.managed);
         // Serial.printf("sent=%d condition %d\n", sent, sent>0 && sent<=qd.m.len);
-        if (sent>0 && sent<=qd.m.len)
-            qd.tx_len+=sent;
+        if (sent > 0 && sent <= qd.m.len)
+            qd.tx_len += sent;
 
-        if (qd.tx_len==qd.m.len){
+        if (qd.tx_len == qd.m.len){
             _popQueue();
             done=true;
         }

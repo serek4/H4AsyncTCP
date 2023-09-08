@@ -4,32 +4,35 @@
 
 ## ArduinoIDE library: Asynchronous TCP Rx/Tx Client and abstract Asynchronous server
 
+### Version 0.0.18
+- Updates _lastSeen on TCP Connected.
+- Prevents unnecessary extra scavenge queues.
 ### Version 0.0.17
 
-Adds ESP8266 Compatibility.
+- Adds ESP8266 Compatibility.
 
 ### Version 0.0.16
 
-Ensure synchronization of writes to prevent scrambled transmitted data.
+- Ensure synchronization of writes to prevent scrambled transmitted data.
 
 ### Version 0.0.15
 
-Adds TLS overhead bytes estimation.
+- Adds TLS overhead bytes estimation.
 
 ### Version 0.0.14
 
-Important critical fixes in managing TLS session, config.
-Fixes delayed lock in shutdown().
+- Important critical fixes in managing TLS session, config.
+- Fixes delayed lock in shutdown().
 ### Version 0.0.13
 
-Adds TLS Session support.
-Fixes several memory leaks.
+- Adds TLS Session support.
+- Fixes several memory leaks.
 
 ### Version 0.0.12
 
-Major and deep fixs of TCP usage, including crashes caused by memory corruption and bad timing.  
-Transitioning from `tcpip_api_call` to use LwIP thread locks.  
-And TLS support.
+- Major and deep fixs of TCP usage, including crashes caused by memory corruption and bad timing.  
+- Transitioning from `tcpip_api_call` to use LwIP thread locks.  
+- And TLS support.
 
 ### Version 0.0.11
 
