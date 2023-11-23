@@ -57,7 +57,6 @@ std::unordered_set<H4AsyncClient*> H4AsyncClient::unconnectedClients;
 bool H4AsyncClient::_scavenging = false;
 
 H4_INT_MAP H4AsyncClient::_errorNames={
-#if H4AT_DEBUG
     {ERR_OK,"No error, everything OK"},
     {ERR_MEM,"Out of memory error"}, // -1
     {ERR_BUF,"Buffer error"},
@@ -87,7 +86,6 @@ H4_INT_MAP H4AsyncClient::_errorNames={
 #if H4AT_TLS
     {H4AT_BAD_TLS_CONFIG,"BAD TLS Config"},
     {H4AT_WRONG_TLS_MODE,"Wrong TLS Mode"}
-#endif
 #endif
 };
 
@@ -847,12 +845,8 @@ void H4AsyncClient::connect(IPAddress ip,uint16_t port){
 bool H4AsyncClient::connected(){ return _state == H4AT_CONN_CONNECTED/*  && pcb && getTCPState(pcb, _isSecure) == ESTABLISHED */; } // Unnecessary checks? (pcb && getState) as there will happen some data races ...
 
 std::string H4AsyncClient::errorstring(int e){
-    #ifdef H4AT_DEBUG
-        if(_errorNames.count(e)) return _errorNames[e];
-        else return stringFromInt(e); 
-    #else
-        return stringFromInt(e); 
-    #endif
+    if(_errorNames.count(e)) return _errorNames[e];
+    else return stringFromInt(e);
 }
 
 uint32_t H4AsyncClient::localAddress() { 
