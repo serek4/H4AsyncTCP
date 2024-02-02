@@ -143,6 +143,7 @@ using H4AT_TCP_QUEUE    =std::queue<TCPData*>;
 class H4AsyncClient {
         static  void                __scavenge();
         static  bool                _scavenging;
+        static uint32_t             _scavengeFrequency;
                 void                _parseURL(const std::string& url);
                 size_t              _processTX(const uint8_t* data, size_t length, bool copy);
                 bool                _processQueue();
@@ -227,6 +228,7 @@ class H4AsyncClient {
         H4AsyncClient(altcp_pcb* p=0);
         virtual ~H4AsyncClient();
                 void                close(){ _shutdown(); }
+        static  void                setScavengeFrequency(uint32_t scavengeFrequency) { _scavengeFrequency = scavengeFrequency; };
                 void                connect(const std::string& host,uint16_t port);
                 void                connect(IPAddress ip,uint16_t port);
                 void                connect(const std::string& url);

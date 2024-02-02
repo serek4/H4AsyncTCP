@@ -55,6 +55,7 @@ std::unordered_set<H4AsyncClient*> H4AsyncClient::txQueueClients;
 std::unordered_set<H4AsyncClient*> H4AsyncClient::openConnections;
 std::unordered_set<H4AsyncClient*> H4AsyncClient::unconnectedClients;
 bool H4AsyncClient::_scavenging = false;
+uint32_t H4AsyncClient::_scavengeFrequency = H4AS_SCAVENGE_FREQ;
 
 H4_INT_MAP H4AsyncClient::_errorNames={
     {ERR_OK,"No error, everything OK"},
@@ -700,7 +701,7 @@ void H4AsyncClient::_scavenge(){
     {
         H4AT_PRINT2("Starting the SCAVENGER\n");
         h4.every(
-            H4AS_SCAVENGE_FREQ,
+            _scavengeFrequency,
             []
             { H4AsyncClient::__scavenge(); },
             nullptr,
@@ -716,13 +717,13 @@ void H4AsyncClient::__scavenge()
     std::vector<H4AsyncClient*> tbd;
     // Nullified PCBs are not really needed to check, as _shutdown() will reset _lastSeen.
     for(auto &oc:openConnections){
-        H4AT_PRINT1("T=%u OC %p ls=%u age(s)=%u SCAV=%u PCB=%p %s\n",millis(),oc,oc->_lastSeen,(millis() - oc->_lastSeen) / 1000,H4AS_SCAVENGE_FREQ, oc->pcb, oc->_state == H4AT_CONN_CLOSING? "CLOSING": "");
-        if((millis() - oc->_lastSeen) > H4AS_SCAVENGE_FREQ || oc->_state == H4AT_CONN_CLOSING) tbd.push_back(oc);
+        H4AT_PRINT1("T=%u OC %p ls=%u age(s)=%u SCAV=%u PCB=%p %s\n",millis(),oc,oc->_lastSeen,(millis() - oc->_lastSeen) / 1000,_scavengeFrequency, oc->pcb, oc->_state == H4AT_CONN_CLOSING? "CLOSING": "");
+        if((millis() - oc->_lastSeen) > _scavengeFrequency || oc->_state == H4AT_CONN_CLOSING) tbd.push_back(oc);
     }
     for(auto &uc:unconnectedClients){
-        H4AT_PRINT1("T=%u UC %p ct=%u age(s)=%u SCAV=%u\n",millis(),uc,uc->_creatTime,(millis() - uc->_creatTime) / 1000,H4AS_SCAVENGE_FREQ);
-        // if((millis() - uc->_creatTime) > H4AS_SCAVENGE_FREQ) tbd.push_back(uc);
-        if((uc->pcb==0 && uc->_state == H4AT_CONN_CLOSING) || ((millis() - uc->_creatTime) > H4AS_SCAVENGE_FREQ)) tbd.push_back(uc);
+        H4AT_PRINT1("T=%u UC %p ct=%u age(s)=%u SCAV=%u\n",millis(),uc,uc->_creatTime,(millis() - uc->_creatTime) / 1000,_scavengeFrequency);
+        // if((millis() - uc->_creatTime) > _scavengeFrequency) tbd.push_back(uc);
+        if((uc->pcb==0 && uc->_state == H4AT_CONN_CLOSING) || ((millis() - uc->_creatTime) > _scavengeFrequency)) tbd.push_back(uc);
     }
     for(auto &rq:tbd) {
         H4AT_PRINT1("Scavenging %p [%s]\n",rq, openConnections.count(rq) ? "OC" : unconnectedClients.count(rq) ? "UC" : "UNKNOWN"); 
